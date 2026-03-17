@@ -1,0 +1,20 @@
+# Web Framework
+streamlit==1.32.0
+
+# Data & Math
+pandas==2.2.1
+numpy==1.26.4
+
+# Charts & UI
+plotly==5.19.0
+
+# Database Access (Neon/PostgreSQL)
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.25
+
+# AI Integration
+google-generativeai==0.4.1
+
+# Web Scraping (For NEPSE Live Data)
+requests==2.31.0
+beautifulsoup4==4.12.3
