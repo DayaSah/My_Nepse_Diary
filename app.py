@@ -31,22 +31,25 @@ def login():
             submit = st.form_submit_button("Login", type="primary", use_container_width=True)
             
             if submit:
-                # Fetch credentials securely from secrets
-                admin_user = st.secrets["auth"]["admin_username"]
-                admin_pass = st.secrets["auth"]["admin_password"]
-                viewer_user = st.secrets["auth"]["viewer_username"]
-                viewer_pass = st.secrets["auth"]["viewer_password"]
+                try:
+                    # Fetch credentials securely from secrets
+                    admin_user = st.secrets["auth"]["admin_username"]
+                    admin_pass = st.secrets["auth"]["admin_password"]
+                    viewer_user = st.secrets["auth"]["viewer_username"]
+                    viewer_pass = st.secrets["auth"]["viewer_password"]
 
-                if username == admin_user and password == admin_pass:
-                    st.session_state.logged_in = True
-                    st.session_state.role = "Admin"
-                    st.rerun()
-                elif username == viewer_user and password == viewer_pass:
-                    st.session_state.logged_in = True
-                    st.session_state.role = "View Only"
-                    st.rerun()
-                else:
-                    st.error("Invalid username or password")
+                    if username == admin_user and password == admin_pass:
+                        st.session_state.logged_in = True
+                        st.session_state.role = "Admin"
+                        st.rerun()
+                    elif username == viewer_user and password == viewer_pass:
+                        st.session_state.logged_in = True
+                        st.session_state.role = "View Only"
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password")
+                except KeyError:
+                    st.error("🚨 Authentication secrets are missing! Please check your .streamlit/secrets.toml file.")
 
 def logout():
     st.session_state.logged_in = False
@@ -68,7 +71,7 @@ try:
     from Tabs import Manage_Data, Activity_Log
 except ImportError as e:
     st.error(f"🚨 Initialization Error: {e}")
-    st.info("Make sure all your files are correctly named inside the 'Tabs' folder.")
+    st.info("Make sure all your files are correctly named inside the 'Tabs' folder. Specifically, check that 'Risk_Journal.py' has no special characters.")
     st.stop()
 
 # ==========================================
@@ -101,15 +104,12 @@ with st.sidebar:
         "📋 System Activity Log"
     ]
     
-    selection = st.radio("Main Menu", menu_options, label_visibility="collapsed")
-    
-    # ... (Keep your menu_options and st.radio above this) ...
-    
+    # Render the menu radio buttons ONCE
     selection = st.radio("Main Menu", menu_options, label_visibility="collapsed")
     
     st.divider()
     
-    # --- ADDED: Manual Sync Button ---
+    # System Actions (Sync Data)
     st.markdown("#### ⚙️ System Actions")
     if st.button("🔄 Sync Live Market Data", type="primary", use_container_width=True):
         with st.spinner("Fetching live data from Chukul API..."):
@@ -118,10 +118,10 @@ with st.sidebar:
                 run_sync(headless=False)
             except Exception as e:
                 st.error(f"Sync failed: {e}")
-    # ---------------------------------
+                
+    st.write("") # Add a little vertical spacing
     
-    st.write("") # Add a little spacing
-    
+    # Logout Button
     if st.button("🚪 Logout", use_container_width=True):
         logout()
 
@@ -144,7 +144,6 @@ elif selection == "🧮 Trade Simulation":
 elif selection == "🎯 Watchlist & Alerts":
     Watchlist.render_page(role)
 elif selection == "🧠 Risk & Journal":
-    # Make sure your file in Tabs is named Risk_Journal.py exactly
     Risk_Journal.render_page(role) 
 elif selection == "📜 Realized History":
     History.render_page(role)
