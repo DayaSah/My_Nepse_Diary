@@ -31,12 +31,17 @@ def login():
             submit = st.form_submit_button("Login", type="primary", use_container_width=True)
             
             if submit:
-                # Update these credentials to your liking!
-                if username == "admin" and password == "admin123":
+                # Fetch credentials securely from secrets
+                admin_user = st.secrets["auth"]["admin_username"]
+                admin_pass = st.secrets["auth"]["admin_password"]
+                viewer_user = st.secrets["auth"]["viewer_username"]
+                viewer_pass = st.secrets["auth"]["viewer_password"]
+
+                if username == admin_user and password == admin_pass:
                     st.session_state.logged_in = True
                     st.session_state.role = "Admin"
                     st.rerun()
-                elif username == "viewer" and password == "view123":
+                elif username == viewer_user and password == viewer_pass:
                     st.session_state.logged_in = True
                     st.session_state.role = "View Only"
                     st.rerun()
