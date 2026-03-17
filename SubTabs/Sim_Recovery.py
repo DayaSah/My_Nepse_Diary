@@ -9,24 +9,49 @@ def render(role):
     try:
         port_df = conn.query("SELECT * FROM portfolio")
         cache_df = conn.query("SELECT * FROM cache")
-    except:
+    except Exception as e:
+        st.error(f"Database error: {e}")
         return
 
-    # [Same holding calculation logic for brevity]
-    port_df['qty'] = pd.to_numeric(port_df['qty'])
-    port_df['price'] = pd.to_numeric(port_df['price'])
+    # 1. Safety Check: Prevent Pandas from crashing on an empty portfolio
+    if port_df.empty:
+        st.info("Your portfolio is empty. Add transactions first.")
+        return
+
+    # 2. Convert types safely and pre-calculate total cost
+    port_df['qty'] = pd.to_numeric(port_df['qty'], errors='coerce').fillna(0)
+    port_df['price'] = pd.to_numeric(port_df['price'], errors='coerce').fillna(0)
+    port_df['cost'] = port_df['qty'] * port_df['price']
+
+    # 3. Calculate Buys safely using .agg() (Crash-proof method)
     buys = port_df[port_df['transaction_type'] == 'BUY']
-    sells = port_df[port_df['transaction_type'] == 'SELL'].groupby('symbol')['qty'].sum().reset_index()
-    sells.rename(columns={'qty': 'sold_qty'}, inplace=True)
-    holdings = buys.groupby('symbol').apply(lambda x: pd.Series({'total_qty': x['qty'].sum(), 'total_cost': (x['qty'] * x['price']).sum()})).reset_index()
-    holdings = pd.merge(holdings, sells, on='symbol', how='left').fillna(0)
+    if buys.empty:
+        st.info("No BUY transactions found to calculate recovery.")
+        return
+        
+    holdings = buys.groupby('symbol').agg(
+        total_qty=('qty', 'sum'),
+        total_cost=('cost', 'sum')
+    ).reset_index()
+
+    # 4. Calculate Sells safely
+    sells = port_df[port_df['transaction_type'] == 'SELL']
+    if not sells.empty:
+        sells_grouped = sells.groupby('symbol').agg(sold_qty=('qty', 'sum')).reset_index()
+        holdings = pd.merge(holdings, sells_grouped, on='symbol', how='left').fillna(0)
+    else:
+        holdings['sold_qty'] = 0
+
+    # 5. Find Active Holdings
     holdings['net_qty'] = holdings['total_qty'] - holdings['sold_qty']
     active_holdings = holdings[holdings['net_qty'] > 0].copy()
-    active_holdings['wacc'] = active_holdings['total_cost'] / active_holdings['total_qty']
 
     if active_holdings.empty or cache_df.empty:
         st.info("Insufficient data to calculate recoveries. Ensure you have active holdings and a synced market cache.")
         return
+
+    # Calculate WACC
+    active_holdings['wacc'] = active_holdings['total_cost'] / active_holdings['total_qty']
 
     # Merge with Live Data
     recovery_df = pd.merge(active_holdings, cache_df[['symbol', 'ltp']], on='symbol', how='inner')
