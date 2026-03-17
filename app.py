@@ -51,9 +51,10 @@ def main_app():
     st.sidebar.divider()
 
     # The list of your exact requested tabs
+    
     menu_options = [
         "Dashboard", "My TMS", "Portfolio", "Watchlist", 
-        "Nepse Data Analysis", "Add Trade", "Sell Stock", 
+        "Nepse Data Analysis", "Add Transaction", 
         "History", "Activity Log", "Wealth Graph", 
         "WACC Projection", "What If Analysis", "Reports", 
         "Manage Data", "Trading Journal", "Risk Manager"
