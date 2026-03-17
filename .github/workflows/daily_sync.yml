@@ -1,0 +1,35 @@
+name: Daily_Basic_Data_Updater
+
+on:
+  schedule:
+    # 11:15 AM UTC equals exactly 5:00 PM Nepal Time (NST)
+    # 0-4 represents Sunday to Thursday
+    - cron: '15 11 * * 0-4'
+  workflow_dispatch: # This allows you to manually click "Run Workflow" in GitHub to test it
+
+jobs:
+  update-market-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          # Only install exactly what is needed for the headless sync to run fast
+          pip install requests pandas sqlalchemy psycopg2-binary
+
+      - name: Run Headless Sync Engine
+        env:
+          # These pull directly from your GitHub Repository Secrets
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "from Utility.Sync import run_sync; run_sync(headless=True)"
