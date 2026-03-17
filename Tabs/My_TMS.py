@@ -121,6 +121,14 @@ def render_page(role):
                                 "remark": t_remark,
                                 "reference": t_ref
                             })
+                          
+                            audit_sql = text("INSERT INTO audit_log (action, symbol, details) VALUES (:act, :sym, :det)")
+                            s.execute(audit_sql, {
+                                "act": f"TMS_{t_type.upper().replace(' ', '_')}",
+                                "sym": t_stock.upper() if t_stock else "-",
+                                "det": f"{t_type} of Rs {t_amount} via {t_medium}"
+                            })
+                            
                             s.commit()
                         st.success("✅ Transaction saved successfully!")
                         st.rerun()
