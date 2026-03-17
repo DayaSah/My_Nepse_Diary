@@ -103,7 +103,25 @@ with st.sidebar:
     
     selection = st.radio("Main Menu", menu_options, label_visibility="collapsed")
     
+    # ... (Keep your menu_options and st.radio above this) ...
+    
+    selection = st.radio("Main Menu", menu_options, label_visibility="collapsed")
+    
     st.divider()
+    
+    # --- ADDED: Manual Sync Button ---
+    st.markdown("#### ⚙️ System Actions")
+    if st.button("🔄 Sync Live Market Data", type="primary", use_container_width=True):
+        with st.spinner("Fetching live data from Chukul API..."):
+            try:
+                from Utility.Sync import run_sync
+                run_sync(headless=False)
+            except Exception as e:
+                st.error(f"Sync failed: {e}")
+    # ---------------------------------
+    
+    st.write("") # Add a little spacing
+    
     if st.button("🚪 Logout", use_container_width=True):
         logout()
 
