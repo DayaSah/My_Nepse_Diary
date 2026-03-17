@@ -1,97 +1,135 @@
 import streamlit as st
-import importlib
-
-# Ensure the page stretches to full width
-st.set_page_config(page_title="NEPSE Pro Terminal", layout="wide")
 
 # ==========================================
-# 1. AUTHENTICATION SYSTEM (Mock Database)
-# Note: In production, put passwords in .streamlit/secrets.toml
+# 1. PAGE CONFIGURATION
 # ==========================================
-USERS = {
-    "admin": {"password": "adminpassword", "role": "Admin"},
-    "guest": {"password": "viewpassword", "role": "View Only"}
-}
+# This MUST be the first Streamlit command
+st.set_page_config(
+    page_title="NEPSE Terminal Pro",
+    page_icon="🦅",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-def login_screen():
-    st.title("🏦 NEPSE Pro Terminal Login")
-    
-    with st.form("login_form"):
-        username = st.text_input("Username").strip().lower()
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
-        
-        if submitted:
-            if username in USERS and USERS[username]["password"] == password:
-                st.session_state["logged_in"] = True
-                st.session_state["role"] = USERS[username]["role"]
-                st.session_state["username"] = username
-                st.rerun()  # Instantly refresh to clear the login screen
-            else:
-                st.error("Invalid Username or Password")
-
-# Initialize session state for security
+# ==========================================
+# 2. AUTHENTICATION SYSTEM
+# ==========================================
 if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
+    st.session_state.logged_in = False
+    st.session_state.role = None
+
+def login():
+    st.title("🔐 Login to NEPSE Terminal")
+    st.markdown("Enter your credentials to access the system.")
+    
+    # Center the login box nicely
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Login", type="primary", use_container_width=True)
+            
+            if submit:
+                # Update these credentials to your liking!
+                if username == "admin" and password == "admin123":
+                    st.session_state.logged_in = True
+                    st.session_state.role = "Admin"
+                    st.rerun()
+                elif username == "viewer" and password == "view123":
+                    st.session_state.logged_in = True
+                    st.session_state.role = "View Only"
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password")
+
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.role = None
+    st.rerun()
+
+# If not logged in, show login page and STOP the script here
+if not st.session_state.logged_in:
+    login()
+    st.stop()
 
 # ==========================================
-# 2. MAIN APPLICATION ROUTER
+# 3. DYNAMIC MODULE IMPORTS
 # ==========================================
-def main_app():
-    # --- Sidebar Navigation ---
-    st.sidebar.title("NEPSE Pro Terminal")
-    st.sidebar.caption(f"Logged in as: **{st.session_state['username'].capitalize()}** ({st.session_state['role']})")
-    
-    if st.sidebar.button("Logout"):
-        st.session_state["logged_in"] = False
-        st.session_state["role"] = None
-        st.session_state["username"] = None
-        st.rerun()
+# We import these ONLY after successful login to save memory
+try:
+    from Tabs import Dashboard, Portfolio, Add_Transaction, My_TMS, Trade_Simulation
+    from Tabs import Watchlist, Risk_Journal, History, Wealth_Graph, Nepse_Data_Analysis
+    from Tabs import Manage_Data, Activity_Log
+except ImportError as e:
+    st.error(f"🚨 Initialization Error: {e}")
+    st.info("Make sure all your files are correctly named inside the 'Tabs' folder.")
+    st.stop()
 
-    st.sidebar.divider()
-
-    # The list of your exact requested tabs
+# ==========================================
+# 4. SIDEBAR & NAVIGATION MENU
+# ==========================================
+with st.sidebar:
+    st.markdown("### 🦅 NEPSE Terminal Pro")
     
+    # Status Indicator
+    if st.session_state.role == "Admin":
+        st.success(f"Logged in as: **{st.session_state.role}**")
+    else:
+        st.info(f"Logged in as: **{st.session_state.role}**")
+        
+    st.divider()
+    
+    # The New Attractive Menu
     menu_options = [
-        "Dashboard", "My TMS", "Portfolio", "Watchlist", 
-        "Nepse Data Analysis", "Add Transaction", 
-        "History", "Activity Log", "Wealth Graph", 
-        "WACC Projection", "What If Analysis", "Reports", 
-        "Manage Data", "Trading Journal", "Risk Manager"
+        "🏠 Dashboard Overview",
+        "💼 Active Portfolio",
+        "➕ Add Transaction",
+        "🏦 My TMS (Cash & Margin)",
+        "🧮 Trade Simulation",
+        "🎯 Watchlist & Alerts",
+        "🧠 Risk & Journal",
+        "📜 Realized History",
+        "📈 Wealth Trajectory",
+        "🤖 AI Market Analyst",
+        "⚙️ Admin: Manage Data",
+        "📋 System Activity Log"
     ]
     
-    selected_tab = st.sidebar.radio("Main Menu", menu_options)
+    selection = st.radio("Main Menu", menu_options, label_visibility="collapsed")
     
-    st.sidebar.divider()
-    
-    # --- Sync Utility Button ---
-    if st.sidebar.button("🔄 Sync Now", use_container_width=True):
-        with st.spinner("Syncing Database..."):
-            # Dynamically import and run the sync utility
-            from Utility import Sync
-            Sync.run_sync()
-            st.sidebar.success("Sync Complete!")
-
-    # --- Dynamic Page Loading ---
-    # We convert the menu name (e.g. "Add Trade") to the filename format (e.g. "Add_Trade")
-    module_name = selected_tab.replace(" ", "_")
-    
-    try:
-        # This dynamically imports the file from the Tabs folder
-        page_module = importlib.import_module(f"Tabs.{module_name}")
-        
-        # We pass the user's role to the page so it can disable buttons if they are "View Only"
-        page_module.render_page(role=st.session_state["role"])
-        
-    except ModuleNotFoundError:
-        st.warning(f"🚧 The module `Tabs/{module_name}.py` has not been created yet.")
-    except AttributeError:
-        st.error(f"❌ `Tabs/{module_name}.py` must contain a function named `render_page(role)`.")
+    st.divider()
+    if st.button("🚪 Logout", use_container_width=True):
+        logout()
 
 # ==========================================
-# 3. APP EXECUTION
+# 5. THE ROUTER ENGINE
 # ==========================================
-if not st.session_state["logged_in"]:
-    login_screen()
-else:
-    main_app()
+role = st.session_state.role
+
+# Route the user to the correct file based on their click
+if selection == "🏠 Dashboard Overview":
+    Dashboard.render_page(role)
+elif selection == "💼 Active Portfolio":
+    Portfolio.render_page(role)
+elif selection == "➕ Add Transaction":
+    Add_Transaction.render_page(role)
+elif selection == "🏦 My TMS (Cash & Margin)":
+    My_TMS.render_page(role)
+elif selection == "🧮 Trade Simulation":
+    Trade_Simulation.render_page(role)
+elif selection == "🎯 Watchlist & Alerts":
+    Watchlist.render_page(role)
+elif selection == "🧠 Risk & Journal":
+    # Make sure your file in Tabs is named Risk_Journal.py exactly
+    Risk_Journal.render_page(role) 
+elif selection == "📜 Realized History":
+    History.render_page(role)
+elif selection == "📈 Wealth Trajectory":
+    Wealth_Graph.render_page(role)
+elif selection == "🤖 AI Market Analyst":
+    Nepse_Data_Analysis.render_page(role)
+elif selection == "⚙️ Admin: Manage Data":
+    Manage_Data.render_page(role)
+elif selection == "📋 System Activity Log":
+    Activity_Log.render_page(role)
