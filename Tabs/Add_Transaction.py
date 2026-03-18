@@ -128,7 +128,6 @@ def render_page(role):
                 sc1, sc2 = st.columns(2)
                 user_wacc = sc1.number_input("Adjusted WACC", value=float(calc_wacc), help="Calculated from your ledger. Edit if needed.")
                 
-               
                 # Auto-select CGT Rate based on days
                 default_tax_idx = 0 if days_held > 365 else 1
                 cgt_selection = sc2.selectbox(
