@@ -22,7 +22,7 @@ def get_current_stock_info(conn, symbol):
 
 def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
     base = qty * price
-    # Tiered Commission
+    # Tiered Broker Commission
     if base <= 50000: comm_rate = 0.0040
     elif base <= 500000: comm_rate = 0.0037
     else: comm_rate = 0.0033
@@ -32,21 +32,22 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
     dp_fee = 25.0 if include_dp else 0.0
     total_charges = broker_comm + sebon_fee + dp_fee
     
-    cgt = 0.0
-    breakeven = 0.0
-    
     if trx_type == "BUY":
-        net_payable = base + total_charges
-        # Breakeven = Total Cost / Qty / 0.995 (roughly accounts for sell fees)
-        # More accurate: (Net_Payable + Sell_Charges + Sell_DP) / Qty
-        breakeven = (net_payable + (net_payable * 0.005) + 25) / qty
-        return {"base": base, "fees": total_charges, "total": net_payable, "cgt": 0, "be": breakeven}
+        total_val = base + total_charges
+        # Breakeven includes estimation for future sell charges (~0.5%)
+        breakeven = (total_val * 1.005 + 25) / qty 
+        return {
+            "base": base, "broker": broker_comm, "sebon": sebon_fee, 
+            "dp": dp_fee, "fees": total_charges, "total": total_val, "be": breakeven
+        }
     else:
         profit = (price - wacc) * qty
-        if profit > 0:
-            cgt = profit * cgt_rate
-        net_receivable = base - total_charges - cgt
-        return {"base": base, "fees": total_charges, "total": net_receivable, "cgt": cgt}
+        cgt = max(0, profit * cgt_rate) if profit > 0 else 0
+        receivable = base - total_charges - cgt
+        return {
+            "base": base, "broker": broker_comm, "sebon": sebon_fee, 
+            "dp": dp_fee, "fees": total_charges, "total": receivable, "cgt": cgt
+        }
 
 def render_page(role):
     st.title("📝 Trade & Settlement Engine")
@@ -88,23 +89,29 @@ def render_page(role):
     res = calculate_fees(t_qty, t_price, trx_type, include_dp, user_wacc, cgt_val)
 
     with col_est:
-        st.subheader("🧾 Estimated Bill")
+        st.subheader("🧾 Settlement Summary")
         with st.container(border=True):
-            st.write(f"**Action:** {trx_type} {t_symbol}")
-            label = "Total Payable" if trx_type == "BUY" else "Net Receivable"
-            st.metric(label, f"Rs {res['total']:,.2f}")
-            
             if trx_type == "BUY":
-                st.metric("Breakeven Price", f"Rs {res['be']:,.2f}", help="Target sell price to cover all fees.")
+                st.metric("Total Payable Amount", f"Rs {res['total']:,.2f}")
+                st.metric("Breakeven Price", f"Rs {res['be']:,.2f}", help="Target price to exit with zero loss.")
+            else:
+                # UI Upgrade: Explicit Final Receivable Amount
+                st.metric("Final Receivable Amount", f"Rs {res['total']:,.2f}")
+                profit_loss = (t_price - user_wacc) * t_qty
+                st.write(f"⚖️ **Est. Net Profit/Loss:** Rs {profit_loss:,.2f}")
 
             st.divider()
-            st.write(f"💵 **Base Amount:** Rs {res['base']:,.2f}")
-            st.write(f"📑 **Total Charges:** Rs {res['fees']:,.2f}")
+            st.write(f"🔸 **Base Price (Gross):** Rs {res['base']:,.2f}")
+            st.write(f"🔹 **Broker Commission:** Rs {res['broker']:,.2f}")
+            st.write(f"🔹 **SEBON Fee:** Rs {res['sebon']:,.2f}")
+            st.write(f"🔹 **DP Fee:** Rs {res['dp']:,.2f}")
+            
             if trx_type == "SELL":
-                st.write(f"⚖️ **Profit Tax (CGT):** Rs {res['cgt']:,.2f}")
-                st.caption(f"Estimated Profit: Rs {(t_price - user_wacc)*t_qty:,.2f}")
+                st.write(f"🚩 **Capital Gains Tax (CGT):** Rs {res['cgt']:,.2f}")
+            
             st.divider()
-            st.info("Charges include: Broker Commission, SEBON fee, and DP fee.")
+            total_deductions = res['fees'] + (res.get('cgt', 0) if trx_type == "SELL" else 0)
+            st.info(f"**Total Charges/Taxes:** Rs {total_deductions:,.2f}")
 
     if btn_save:
         if not t_symbol:
