@@ -20,9 +20,7 @@ def get_current_stock_info(conn, symbol):
         total_buy_qty = buys['qty'].sum()
         
         # --- THE NEW WACC LOGIC ---
-        # If the 'net_amount' column exists, use it! Otherwise, fallback to basic qty * price
         if 'net_amount' in buys.columns:
-            # Fill any old empty rows with the base cost to prevent errors
             buys['net_amount'] = buys['net_amount'].fillna(buys['qty'] * buys['price'])
             total_buy_cost = buys['net_amount'].sum()
         else:
@@ -37,54 +35,44 @@ def get_current_stock_info(conn, symbol):
     except Exception as e:
         return 0, 0.0, date.today()
 
-def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
-    """Updated logic with current NEPSE/SEBON commission tiers and correct NEPSE CGT rules."""
+def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, override_comm=0.0):
+    """Updated logic with NEPSE tiers, CGT rules, and manual commission overrides."""
     base = qty * price
     
-    # --- CURRENT NEPSE COMMISSION TIERS ---
     if base <= 50000:
-        comm_rate = 0.0036  # 0.36%
+        comm_rate = 0.0036 
     elif base <= 500000:
-        comm_rate = 0.0033  # 0.33%
+        comm_rate = 0.0033 
     elif base <= 2000000:
-        comm_rate = 0.0031  # 0.31%
+        comm_rate = 0.0031 
     elif base <= 10000000:
-        comm_rate = 0.0027  # 0.27%
+        comm_rate = 0.0027 
     else:
-        comm_rate = 0.0024  # 0.24%
+        comm_rate = 0.0024 
     
-    # Calculate Broker Commission (Minimum Rs. 10)
-    broker_comm = max(10, base * comm_rate)
+    # Check if user manually overrode the commission due to partial executions
+    if override_comm > 0:
+        broker_comm = override_comm
+    else:
+        broker_comm = max(10, base * comm_rate)
     
-    # SEBON Regulatory Fee (0.015%)
     sebon_fee = base * 0.00015
-    
     dp_fee = 25.0 if include_dp else 0.0
     total_charges = broker_comm + sebon_fee + dp_fee
     
     if trx_type == "BUY":
         total_val = base + total_charges
-        # Breakeven estimation: includes future sell fees (Comm + SEBON + DP)
         breakeven = (total_val + (total_val * 0.0045) + 25) / qty 
         return {
             "base": base, "broker": broker_comm, "sebon": sebon_fee, 
             "dp": dp_fee, "fees": total_charges, "total": total_val, "be": breakeven
         }
     else:
-        # --- FIXED SELL LOGIC FOR NEPSE ---
-        # 1. Deduct selling fees from the gross amount to get the Net Sell Value
         net_sell_value = base - total_charges
-        
-        # 2. Total cost based on user's WACC (WACC must include historical buy-side fees)
         total_buy_cost = wacc * qty
-        
-        # 3. Calculate actual taxable NEPSE profit
         profit = net_sell_value - total_buy_cost
         
-        # 4. Calculate CGT (Only if profit is greater than 0)
         cgt = max(0, profit * cgt_rate) if profit > 0 else 0
-        
-        # 5. Final Receivable amount
         receivable = net_sell_value - cgt
         
         return {
@@ -104,7 +92,6 @@ def render_page(role):
             trx_type = st.radio("Transaction Type", ["BUY", "SELL"], horizontal=True)
             t_symbol = st.text_input("Stock Symbol", placeholder="e.g. NABIL").upper().strip()
             
-            # 1. Fetch current stock data
             owned_qty, calc_wacc, first_date = get_current_stock_info(conn, t_symbol)
             
             c1, c2 = st.columns(2)
@@ -112,21 +99,15 @@ def render_page(role):
             t_price = c2.number_input("Execution Price (Rs)", min_value=1.0, step=0.1, value=100.0)
             
             t_date = st.date_input("Transaction Date", value=date.today())
-            
-            # ADDED: Remarks Field for both BUY and SELL
             t_remarks = st.text_input("Remarks / Notes", placeholder="e.g., Bought on dip, IPO sale, etc.")
 
-            # --- SELL SIDE SPECIFIC LOGIC ---
             user_wacc = calc_wacc
-            cgt_val = 0.05 # Default
+            cgt_val = 0.05 
             
             if trx_type == "SELL":
-                # Calculate Days Held
                 days_held = (date.today() - first_date).days
-                
                 st.markdown(f"**Holding Info:** Purchased on `{first_date}` ({days_held} days ago)")
                 
-                # Portfolio Warning
                 if t_qty > owned_qty:
                     st.error(f"⚠️ **Short Sell Warning:** You only own {owned_qty} units of {t_symbol}.")
                 else:
@@ -135,21 +116,19 @@ def render_page(role):
                 sc1, sc2 = st.columns(2)
                 user_wacc = sc1.number_input("Adjusted WACC", value=float(calc_wacc), help="Calculated from your ledger. Edit if needed.")
                 
-                # Auto-select CGT Rate based on days
                 default_tax_idx = 0 if days_held > 365 else 1
                 cgt_selection = sc2.selectbox(
                     "CGT Rate", 
                     ["5% (Long Term > 1yr)", "7.5% (Short Term < 1yr)"],
                     index=default_tax_idx
                 )
-                # FIXED: It now correctly checks for 7.5% first!
                 cgt_val = 0.075 if "7.5%" in cgt_selection else 0.05
 
-            # --- COMMON OPTIONS ---
             st.divider()
-            include_dp = st.checkbox("Include DP Fee (Rs. 25)", value=True)
+            c_dp, c_comm = st.columns(2)
+            include_dp = c_dp.checkbox("Include DP Fee (Rs. 25)", value=True)
+            override_comm = c_comm.number_input("Override Broker Comm (Rs)", value=0.0, step=1.0, help="If NEPSE split your order and charged multiple Rs 10 minimums, enter the total TMS commission here.")
             
-            # --- ACTION BUTTONS ---
             st.write("")
             btn_calc = st.button("🧮 Calculate Estimation", use_container_width=True)
             
@@ -157,9 +136,9 @@ def render_page(role):
             btn_save = st.button(log_btn_label, type="primary", use_container_width=True)
 
     # ==========================================
-    # CALCULATION ENGINE (Calculates every rerun for live feedback)
+    # CALCULATION ENGINE
     # ==========================================
-    res = calculate_fees(t_qty, t_price, trx_type, include_dp, user_wacc, cgt_val)
+    res = calculate_fees(t_qty, t_price, trx_type, include_dp, user_wacc, cgt_val, override_comm)
 
     with col_est:
         st.subheader("🧾 Settlement Bill")
@@ -193,21 +172,20 @@ def render_page(role):
         else:
             try:
                 with conn.session as s:
-                    # 1. Insert into Portfolio (MODIFIED TO INCLUDE REMARKS)
+                    # FIXED: Added net_amount to the string so the database accepts the :n parameter!
                     s.execute(text("""
-                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks) 
-                        VALUES (:d, :s, :q, :p, :t, :r)
+                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount) 
+                        VALUES (:d, :s, :q, :p, :t, :r, :n)
                     """), {
                         "d": t_date, 
                         "s": t_symbol, 
                         "q": t_qty, 
                         "p": t_price, 
                         "t": trx_type,
-                        "r": t_remarks,  # Pass the new remarks field
-                        "n": res['total']
+                        "r": t_remarks,
+                        "n": res['total']  
                     })
                     
-                    # 2. Audit Logging
                     s.execute(text("""
                         INSERT INTO audit_log (action, symbol, details) 
                         VALUES (:act, :sym, :det)
@@ -226,7 +204,6 @@ def render_page(role):
     st.markdown("---")
     st.markdown("### 🕒 Recent Entries")
     try:
-        # Changed the query to fetch the newest data via DATE
         recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
         if not recent.empty:
             st.dataframe(recent, use_container_width=True, hide_index=True)
