@@ -3,128 +3,155 @@ import pandas as pd
 from sqlalchemy import text
 from datetime import date
 
-def render_page(role):
-    st.title("📝 Add Transaction")
-    st.caption("Record your Buy and Sell orders. The portfolio and TMS will update automatically.")
+def calculate_nepse_charges(qty, price, trx_type, include_dp=True, cgt_rate=0.05):
+    """Calculates exact NEPSE fees and commissions."""
+    base_amount = qty * price
+    
+    # 1. Broker Commission (Tiered)
+    if base_amount <= 50000:
+        commission_rate = 0.0040 # 0.40%
+    elif base_amount <= 500000:
+        commission_rate = 0.0037 # 0.37%
+    else:
+        commission_rate = 0.0033 # 0.33%
+        
+    broker_commission = base_amount * commission_rate
+    
+    # Minimum commission rule (Rs. 10)
+    if broker_commission < 10:
+        broker_commission = 10
+        
+    # 2. SEBON Fee (0.015%)
+    sebon_fee = base_amount * 0.00015
+    
+    # 3. DP Fee (Rs. 25)
+    dp_fee = 25.0 if include_dp else 0.0
+    
+    total_charges = broker_commission + sebon_fee + dp_fee
+    
+    if trx_type == "BUY":
+        final_amount = base_amount + total_charges
+        return {
+            "base": base_amount,
+            "broker": broker_commission,
+            "sebon": sebon_fee,
+            "dp": dp_fee,
+            "total_fees": total_charges,
+            "final": final_amount,
+            "cgt": 0
+        }
+    else:
+        # For Sells, CGT is usually on (Sell Price - Buy Price). 
+        # Since we don't know the Buy Price here, we estimate CGT on 20% of Sell Value 
+        # as a placeholder for 'Profit Tax' for the UI.
+        estimated_profit = base_amount * 0.20 
+        cgt = estimated_profit * cgt_rate
+        final_amount = base_amount - total_charges - cgt
+        return {
+            "base": base_amount,
+            "broker": broker_commission,
+            "sebon": sebon_fee,
+            "dp": dp_fee,
+            "total_fees": total_charges,
+            "final": final_amount,
+            "cgt": cgt
+        }
 
-    # Initialize Database Connection
+def render_page(role):
+    st.title("📝 Trade Entry & Calculator")
+    st.caption("Calculate NEPSE charges and log your trades to the master ledger.")
+
     conn = st.connection("neon", type="sql")
 
-    # ==========================================
-    # 0. SYSTEM LOGGING UTILITY
-    # ==========================================
-    def log_system_error(error_msg):
-        """Silently logs errors to the audit_log table."""
-        try:
-            with conn.session as s:
-                sql = text("INSERT INTO audit_log (action, details) VALUES ('SYSTEM_ERROR', :msg)")
-                s.execute(sql, {"msg": str(error_msg)})
-                s.commit()
-        except:
-            pass
-
-    # ==========================================
-    # 1. THE TRANSACTION FORM
-    # ==========================================
     if role == "View Only":
-        st.warning("🔒 View Only mode: You cannot add transactions.")
+        st.warning("🔒 View Only mode: Entry disabled.")
         return
 
-    # Use a neat card-like container for the form
-    with st.container(border=True):
-        # Transaction Type Selector (Large Radio Buttons)
-        trx_type = st.radio(
-            "Transaction Type", 
-            options=["BUY", "SELL"], 
-            horizontal=True,
-            help="Are you buying new shares or selling existing ones?"
-        )
+    # Create two columns: Left for Form, Right for Estimation
+    col_form, col_est = st.columns([1.2, 1])
 
-        st.divider()
+    with col_form:
+        with st.container(border=True):
+            trx_type = st.radio("Action Type", ["BUY", "SELL"], horizontal=True)
+            
+            t_symbol = st.text_input("Stock Symbol", placeholder="NABIL").upper().strip()
+            
+            c1, c2 = st.columns(2)
+            t_qty = c1.number_input("Quantity", min_value=1, step=10, value=10)
+            t_price = c2.number_input("Price (Rs)", min_value=1.0, step=1.0, value=200.0)
+            
+            t_date = st.date_input("Transaction Date", value=date.today())
+            
+            st.markdown("---")
+            st.markdown("##### ⚙️ Options")
+            use_dp = st.checkbox("Include DP Fee (Rs. 25)", value=True)
+            
+            cgt_val = 0.05
+            if trx_type == "SELL":
+                cgt_type = st.selectbox("CGT Rate", ["5% (Individual)", "7.5% (Short Term)"])
+                cgt_val = 0.05 if "5%" in cgt_type else 0.075
 
-        with st.form("trade_form", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                t_date = st.date_input("Transaction Date", value=date.today())
-                t_symbol = st.text_input("Stock Symbol", placeholder="e.g. NABIL").upper().strip()
-            
-            with col2:
-                t_qty = st.number_input("Quantity (Shares)", min_value=1, step=10)
-                t_price = st.number_input("Execution Price (Rs)", min_value=1.0, step=1.0, format="%.2f")
+            btn_calc = st.button("🧮 Calculate Estimation", use_container_width=True)
+            btn_save = st.button(f"🚀 Confirm & Log {trx_type} Trade", type="primary", use_container_width=True)
 
-            # --- Live Estimate Section (Visual Aid Only) ---
-            st.markdown("##### 🧾 Estimated NEPSE Settlement")
-            base_amount = t_qty * t_price
-            
-            # Rough NEPSE logic (approximate broker commission + 25 DP + 0.015% SEBON)
-            estimated_broker = base_amount * 0.004 # roughly 0.4% average
-            sebon_fee = base_amount * 0.00015
-            dp_fee = 25.0
-            
-            if trx_type == "BUY":
-                est_total = base_amount + estimated_broker + sebon_fee + dp_fee
-                st.info(f"**Estimated Total Cost:** Rs {est_total:,.2f} *(Includes approx Rs {estimated_broker+sebon_fee+dp_fee:,.2f} in fees)*")
-            else:
-                cgt = (base_amount * 0.05) # Assuming 5% CGT for rough visual estimate
-                est_total = base_amount - estimated_broker - sebon_fee - dp_fee - cgt
-                st.info(f"**Estimated Bank Deposit:** Rs {est_total:,.2f} *(After approx Rs {estimated_broker+sebon_fee+dp_fee:,.2f} fees & 5% CGT)*")
+    # ==========================================
+    # LOGIC: ESTIMATION BOX
+    # ==========================================
+    res = calculate_nepse_charges(t_qty, t_price, trx_type, use_dp, cgt_val)
 
+    with col_est:
+        st.subheader("🧾 Settlement Summary")
+        
+        # Display the breakdown in a clean list
+        with st.container(border=True):
+            st.write(f"**Symbol:** {t_symbol if t_symbol else '---'}")
+            st.metric("Final Payable/Receivable", f"Rs {res['final']:,.2f}")
+            
             st.divider()
-            submitted = st.form_submit_button(f"💾 Log {trx_type} Order", type="primary", use_container_width=True)
-
-            # ==========================================
-            # 2. SAVE LOGIC
-            # ==========================================
-            if submitted:
-                if not t_symbol:
-                    st.error("Please enter a valid stock symbol.")
-                else:
-                    try:
-                        with conn.session as s:
-                            # 1. Insert into Portfolio Table
-                            sql = text("""
-                                INSERT INTO portfolio (date, symbol, qty, price, transaction_type) 
-                                VALUES (:date, :sym, :qty, :price, :type)
-                            """)
-                            s.execute(sql, {
-                                "date": t_date, 
-                                "sym": t_symbol, 
-                                "qty": t_qty, 
-                                "price": t_price, 
-                                "type": trx_type
-                            })
-                            
-                            # 2. Insert into Audit Log
-                            audit_sql = text("""
-                                INSERT INTO audit_log (action, symbol, details) 
-                                VALUES (:act, :sym, :det)
-                            """)
-                            s.execute(audit_sql, {
-                                "act": f"TRADE_{trx_type}", 
-                                "sym": t_symbol, 
-                                "det": f"{trx_type} {t_qty} units @ Rs {t_price}"
-                            })
-                            
-                            s.commit()
-                            
-                        st.success(f"✅ Successfully logged {trx_type} of {t_qty} {t_symbol} shares!")
-                        st.balloons()
-                        
-                    except Exception as e:
-                        st.error("❌ Failed to save transaction.")
-                        log_system_error(f"Trade Save Error ({trx_type} {t_symbol}): {e}")
+            
+            st.write(f"🔹 **Base Amount:** Rs {res['base']:,.2f}")
+            st.write(f"🔹 **Broker Comm:** Rs {res['broker']:,.2f}")
+            st.write(f"🔹 **SEBON Fee:** Rs {res['sebon']:,.2f}")
+            st.write(f"🔹 **DP Fee:** Rs {res['dp']:,.2f}")
+            
+            if trx_type == "SELL":
+                st.write(f"🔸 **Est. CGT (on 20% profit):** Rs {res['cgt']:,.2f}")
+            
+            st.divider()
+            st.info(f"**Total Charges:** Rs {res['total_fees'] + res['cgt']:,.2f}")
 
     # ==========================================
-    # 3. RECENT TRANSACTIONS PREVIEW
+    # LOGIC: DATABASE SAVE
     # ==========================================
-    st.markdown("### 🕒 Recent Transactions")
-    try:
-        recent_df = conn.query("SELECT date, symbol, transaction_type, qty, price FROM portfolio ORDER BY id DESC LIMIT 5")
-        if not recent_df.empty:
-            recent_df.columns = [c.capitalize() for c in recent_df.columns] # Make headers pretty
-            st.dataframe(recent_df, use_container_width=True, hide_index=True)
+    if btn_save:
+        if not t_symbol:
+            st.error("Missing Symbol!")
         else:
-            st.caption("No recent transactions found.")
-    except Exception as e:
-        log_system_error(f"Recent Trade Fetch Error: {e}")
+            try:
+                with conn.session as s:
+                    # 1. Insert Transaction
+                    s.execute(text("""
+                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type) 
+                        VALUES (:date, :sym, :qty, :price, :type)
+                    """), {"date": t_date, "sym": t_symbol, "qty": t_qty, "price": t_price, "type": trx_type})
+                    
+                    # 2. Log Activity
+                    s.execute(text("""
+                        INSERT INTO audit_log (action, symbol, details) 
+                        VALUES (:act, :sym, :det)
+                    """), {
+                        "act": f"TRADE_{trx_type}", 
+                        "sym": t_symbol, 
+                        "det": f"{t_qty} units @ Rs {t_price} (Fees: Rs {res['total_fees']:.2f})"
+                    })
+                    s.commit()
+                st.success(f"Successfully logged {t_symbol} {trx_type}")
+                st.balloons()
+            except Exception as e:
+                st.error(f"Database Error: {e}")
+
+    # 3. RECENT PREVIEW
+    st.markdown("---")
+    st.markdown("### 🕒 Recent Entries")
+    recent = conn.query("SELECT date, symbol, transaction_type, qty, price FROM portfolio ORDER BY id DESC LIMIT 5", ttl=0)
+    st.dataframe(recent, use_container_width=True, hide_index=True)
