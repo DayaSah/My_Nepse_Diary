@@ -9,7 +9,7 @@ def get_current_stock_info(conn, symbol):
     
     try:
         # 1. Fetch all trades for this stock, sorted from OLDEST to NEWEST
-        df = conn.query(f"SELECT * FROM portfolio WHERE symbol = '{symbol.upper()}' ORDER BY date ASC", ttl=0)
+        df = conn.query(f"SELECT * FROM portfolio WHERE symbol = '{symbol.upper()}' ORDER BY date ASC, transaction_type DESC", ttl=0)
         if df.empty: return 0, 0.0, date.today()
         
         df.columns = [c.lower() for c in df.columns]
