@@ -26,8 +26,8 @@ def render_page(role):
     # 1. FETCH AND PROCESS DATA
     # ==========================================
     try:
-        wl_df = conn.query("SELECT * FROM watchlist ORDER BY added_date DESC")
-        cache_df = conn.query("SELECT * FROM cache")
+        wl_df = conn.query("SELECT * FROM watchlist ORDER BY added_date DESC", ttl=0)
+        cache_df = conn.query("SELECT * FROM cache", ttl=3600)
         
         # Standardize columns for Postgres
         wl_df.columns = [c.lower() for c in wl_df.columns]
