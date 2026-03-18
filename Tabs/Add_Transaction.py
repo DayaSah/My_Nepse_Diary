@@ -3,155 +3,124 @@ import pandas as pd
 from sqlalchemy import text
 from datetime import date
 
-def calculate_nepse_charges(qty, price, trx_type, include_dp=True, cgt_rate=0.05):
-    """Calculates exact NEPSE fees and commissions."""
-    base_amount = qty * price
+def get_current_stock_info(conn, symbol):
+    """Calculates current quantity and WACC for a specific stock."""
+    if not symbol: return 0, 0.0
+    df = conn.query(f"SELECT * FROM portfolio WHERE symbol = '{symbol.upper()}'", ttl=0)
+    if df.empty: return 0, 0.0
     
-    # 1. Broker Commission (Tiered)
-    if base_amount <= 50000:
-        commission_rate = 0.0040 # 0.40%
-    elif base_amount <= 500000:
-        commission_rate = 0.0037 # 0.37%
-    else:
-        commission_rate = 0.0033 # 0.33%
-        
-    broker_commission = base_amount * commission_rate
+    df.columns = [c.lower() for c in df.columns]
+    buys = df[df['transaction_type'].str.upper() == 'BUY']
+    sells = df[df['transaction_type'].str.upper() == 'SELL']
     
-    # Minimum commission rule (Rs. 10)
-    if broker_commission < 10:
-        broker_commission = 10
-        
-    # 2. SEBON Fee (0.015%)
-    sebon_fee = base_amount * 0.00015
+    total_buy_qty = buys['qty'].sum()
+    total_buy_cost = (buys['qty'] * buys['price']).sum()
+    wacc = total_buy_cost / total_buy_qty if total_buy_qty > 0 else 0.0
     
-    # 3. DP Fee (Rs. 25)
+    net_qty = total_buy_qty - sells['qty'].sum()
+    return net_qty, wacc
+
+def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
+    base = qty * price
+    # Tiered Commission
+    if base <= 50000: comm_rate = 0.0040
+    elif base <= 500000: comm_rate = 0.0037
+    else: comm_rate = 0.0033
+    
+    broker_comm = max(10, base * comm_rate)
+    sebon_fee = base * 0.00015
     dp_fee = 25.0 if include_dp else 0.0
+    total_charges = broker_comm + sebon_fee + dp_fee
     
-    total_charges = broker_commission + sebon_fee + dp_fee
+    cgt = 0.0
+    breakeven = 0.0
     
     if trx_type == "BUY":
-        final_amount = base_amount + total_charges
-        return {
-            "base": base_amount,
-            "broker": broker_commission,
-            "sebon": sebon_fee,
-            "dp": dp_fee,
-            "total_fees": total_charges,
-            "final": final_amount,
-            "cgt": 0
-        }
+        net_payable = base + total_charges
+        # Breakeven = Total Cost / Qty / 0.995 (roughly accounts for sell fees)
+        # More accurate: (Net_Payable + Sell_Charges + Sell_DP) / Qty
+        breakeven = (net_payable + (net_payable * 0.005) + 25) / qty
+        return {"base": base, "fees": total_charges, "total": net_payable, "cgt": 0, "be": breakeven}
     else:
-        # For Sells, CGT is usually on (Sell Price - Buy Price). 
-        # Since we don't know the Buy Price here, we estimate CGT on 20% of Sell Value 
-        # as a placeholder for 'Profit Tax' for the UI.
-        estimated_profit = base_amount * 0.20 
-        cgt = estimated_profit * cgt_rate
-        final_amount = base_amount - total_charges - cgt
-        return {
-            "base": base_amount,
-            "broker": broker_commission,
-            "sebon": sebon_fee,
-            "dp": dp_fee,
-            "total_fees": total_charges,
-            "final": final_amount,
-            "cgt": cgt
-        }
+        profit = (price - wacc) * qty
+        if profit > 0:
+            cgt = profit * cgt_rate
+        net_receivable = base - total_charges - cgt
+        return {"base": base, "fees": total_charges, "total": net_receivable, "cgt": cgt}
 
 def render_page(role):
-    st.title("📝 Trade Entry & Calculator")
-    st.caption("Calculate NEPSE charges and log your trades to the master ledger.")
-
+    st.title("📝 Trade & Settlement Engine")
     conn = st.connection("neon", type="sql")
 
-    if role == "View Only":
-        st.warning("🔒 View Only mode: Entry disabled.")
-        return
-
-    # Create two columns: Left for Form, Right for Estimation
     col_form, col_est = st.columns([1.2, 1])
 
     with col_form:
         with st.container(border=True):
-            trx_type = st.radio("Action Type", ["BUY", "SELL"], horizontal=True)
-            
+            trx_type = st.radio("Transaction", ["BUY", "SELL"], horizontal=True)
             t_symbol = st.text_input("Stock Symbol", placeholder="NABIL").upper().strip()
             
+            # Fetch Data for Sell Side
+            owned_qty, calc_wacc = get_current_stock_info(conn, t_symbol)
+            
             c1, c2 = st.columns(2)
-            t_qty = c1.number_input("Quantity", min_value=1, step=10, value=10)
-            t_price = c2.number_input("Price (Rs)", min_value=1.0, step=1.0, value=200.0)
+            t_qty = c1.number_input("Quantity", min_value=1, step=1, value=10)
+            t_price = c2.number_input("Price (Rs)", min_value=1.0, step=0.1, value=100.0)
             
-            t_date = st.date_input("Transaction Date", value=date.today())
+            # Sell Side Logic: Warning & WACC
+            user_wacc = 0.0
+            if trx_type == "SELL":
+                st.warning(f"Portfolio: You own **{owned_qty}** units.")
+                if t_qty > owned_qty:
+                    st.error("⚠️ **SHORT SELLING ALERT:** You are selling more than you own.")
+                
+                user_wacc = st.number_input("Your Buy WACC (for CGT)", value=float(calc_wacc), help="Editable for manual adjustment")
             
-            st.markdown("---")
-            st.markdown("##### ⚙️ Options")
-            use_dp = st.checkbox("Include DP Fee (Rs. 25)", value=True)
-            
+            include_dp = st.checkbox("Include DP Fee (Rs. 25)", value=True)
             cgt_val = 0.05
             if trx_type == "SELL":
-                cgt_type = st.selectbox("CGT Rate", ["5% (Individual)", "7.5% (Short Term)"])
+                cgt_type = st.selectbox("CGT Rate", ["5% (Long Term)", "7.5% (Short Term)"])
                 cgt_val = 0.05 if "5%" in cgt_type else 0.075
 
-            btn_calc = st.button("🧮 Calculate Estimation", use_container_width=True)
-            btn_save = st.button(f"🚀 Confirm & Log {trx_type} Trade", type="primary", use_container_width=True)
+            st.divider()
+            btn_save = st.button(f"💾 Log {trx_type} Transaction", type="primary", use_container_width=True)
 
-    # ==========================================
-    # LOGIC: ESTIMATION BOX
-    # ==========================================
-    res = calculate_nepse_charges(t_qty, t_price, trx_type, use_dp, cgt_val)
+    # Calculation Engine
+    res = calculate_fees(t_qty, t_price, trx_type, include_dp, user_wacc, cgt_val)
 
     with col_est:
-        st.subheader("🧾 Settlement Summary")
-        
-        # Display the breakdown in a clean list
+        st.subheader("🧾 Estimated Bill")
         with st.container(border=True):
-            st.write(f"**Symbol:** {t_symbol if t_symbol else '---'}")
-            st.metric("Final Payable/Receivable", f"Rs {res['final']:,.2f}")
+            st.write(f"**Action:** {trx_type} {t_symbol}")
+            label = "Total Payable" if trx_type == "BUY" else "Net Receivable"
+            st.metric(label, f"Rs {res['total']:,.2f}")
             
-            st.divider()
-            
-            st.write(f"🔹 **Base Amount:** Rs {res['base']:,.2f}")
-            st.write(f"🔹 **Broker Comm:** Rs {res['broker']:,.2f}")
-            st.write(f"🔹 **SEBON Fee:** Rs {res['sebon']:,.2f}")
-            st.write(f"🔹 **DP Fee:** Rs {res['dp']:,.2f}")
-            
-            if trx_type == "SELL":
-                st.write(f"🔸 **Est. CGT (on 20% profit):** Rs {res['cgt']:,.2f}")
-            
-            st.divider()
-            st.info(f"**Total Charges:** Rs {res['total_fees'] + res['cgt']:,.2f}")
+            if trx_type == "BUY":
+                st.metric("Breakeven Price", f"Rs {res['be']:,.2f}", help="Target sell price to cover all fees.")
 
-    # ==========================================
-    # LOGIC: DATABASE SAVE
-    # ==========================================
+            st.divider()
+            st.write(f"💵 **Base Amount:** Rs {res['base']:,.2f}")
+            st.write(f"📑 **Total Charges:** Rs {res['fees']:,.2f}")
+            if trx_type == "SELL":
+                st.write(f"⚖️ **Profit Tax (CGT):** Rs {res['cgt']:,.2f}")
+                st.caption(f"Estimated Profit: Rs {(t_price - user_wacc)*t_qty:,.2f}")
+            st.divider()
+            st.info("Charges include: Broker Commission, SEBON fee, and DP fee.")
+
     if btn_save:
         if not t_symbol:
-            st.error("Missing Symbol!")
+            st.error("Enter a Symbol")
         else:
             try:
                 with conn.session as s:
-                    # 1. Insert Transaction
-                    s.execute(text("""
-                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type) 
-                        VALUES (:date, :sym, :qty, :price, :type)
-                    """), {"date": t_date, "sym": t_symbol, "qty": t_qty, "price": t_price, "type": trx_type})
-                    
-                    # 2. Log Activity
-                    s.execute(text("""
-                        INSERT INTO audit_log (action, symbol, details) 
-                        VALUES (:act, :sym, :det)
-                    """), {
-                        "act": f"TRADE_{trx_type}", 
-                        "sym": t_symbol, 
-                        "det": f"{t_qty} units @ Rs {t_price} (Fees: Rs {res['total_fees']:.2f})"
-                    })
+                    s.execute(text("INSERT INTO portfolio (date, symbol, qty, price, transaction_type) VALUES (:d, :s, :q, :p, :t)"),
+                              {"d": date.today(), "s": t_symbol, "q": t_qty, "p": t_price, "t": trx_type})
                     s.commit()
-                st.success(f"Successfully logged {t_symbol} {trx_type}")
+                st.success("Transaction Saved!")
                 st.balloons()
             except Exception as e:
-                st.error(f"Database Error: {e}")
+                st.error(f"Error: {e}")
 
-    # 3. RECENT PREVIEW
-    st.markdown("---")
-    st.markdown("### 🕒 Recent Entries")
-    recent = conn.query("SELECT date, symbol, transaction_type, qty, price FROM portfolio ORDER BY id DESC LIMIT 5", ttl=0)
+    # Recent Data
+    st.markdown("### 🕒 Recent Ledger")
+    recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price FROM portfolio ORDER BY id DESC LIMIT 5", ttl=0)
     st.dataframe(recent, use_container_width=True, hide_index=True)
