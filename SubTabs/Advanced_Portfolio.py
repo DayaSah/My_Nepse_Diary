@@ -1,79 +1,209 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
+from datetime import date, datetime
+
+def calculate_nepse_fees(amount, side="BUY"):
+    """Calculates tiered broker commission, SEBON fee, and DP fee."""
+    if amount <= 0: return 0
+    # Tiered Commission
+    if amount <= 50000: comm = max(10, amount * 0.0040)
+    elif amount <= 500000: comm = amount * 0.0037
+    else: comm = amount * 0.0033
+    
+    sebon = amount * 0.00015
+    dp = 25.0
+    return comm + sebon + dp
 
 def render_advanced_view():
-    st.title("🚀 Advanced Portfolio Analytics")
-    st.caption("Detailed Performance, Realized Profits, and Risk Metrics.")
-    
+    st.title("🚀 Pro-Trader Analytics Dashboard")
+    st.caption("Deep-dive into Risk, Performance, and Friction Costs.")
+
     conn = st.connection("neon", type="sql")
     
-    # Fetch Data
-    df = conn.query("SELECT * FROM portfolio", ttl=0)
-    df.columns = [c.lower() for c in df.columns]
-    cache = conn.query("SELECT * FROM cache", ttl=600)
-    
-    # --- 1. REALIZED P/L ENGINE ---
-    buys = df[df['transaction_type'] == 'BUY']
-    sells = df[df['transaction_type'] == 'SELL']
-    
-    # Calculate WACC for every symbol ever bought
-    wacc_db = buys.groupby('symbol').apply(lambda x: (x['qty']*x['price']).sum() / x['qty'].sum()).to_dict()
-    
-    # Realized P/L Calculation
-    realized_df = sells.copy()
-    realized_df['buy_cost_basis'] = realized_df['symbol'].map(wacc_db)
-    realized_df['profit_amt'] = (realized_df['price'] - realized_df['buy_cost_basis']) * realized_df['qty']
-    # Deduct approx 0.5% fees
-    realized_df['net_realized'] = realized_df['profit_amt'] - (realized_df['price'] * realized_df['qty'] * 0.005)
-    
-    total_realized_cash = realized_df['net_realized'].sum()
+    # 1. DATA ACQUISITION
+    try:
+        df = conn.query("SELECT * FROM portfolio", ttl=0)
+        cache = conn.query("SELECT * FROM cache", ttl=600)
+        wealth_history = conn.query("SELECT * FROM wealth ORDER BY snapshot_date ASC", ttl=0)
+        
+        df.columns = [c.lower() for c in df.columns]
+        if not cache.empty: cache.columns = [c.lower() for c in cache.columns]
+        if not wealth_history.empty: wealth_history.columns = [c.lower() for c in wealth_history.columns]
+    except Exception as e:
+        st.error(f"Data Fetch Error: {e}"); return
 
-    # --- 2. FRICTION COSTS (FEES) ---
-    total_volume = (df['qty'] * df['price']).sum()
-    total_fees_paid = total_volume * 0.005 # Total estimated broker/sebon/dp fees
+    if df.empty:
+        st.warning("No transaction data found to analyze."); return
 
-    # --- 3. PERFORMANCE STATS ---
-    total_trades = len(sells)
-    winning_trades = len(realized_df[realized_df['net_realized'] > 0])
-    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    # 2. CALCULATION ENGINE (PRE-PROCESSING)
+    df['date'] = pd.to_datetime(df['date']).dt.date
+    buys = df[df['transaction_type'].str.upper() == 'BUY'].copy()
+    sells = df[df['transaction_type'].str.upper() == 'SELL'].copy()
 
-    # --- UI: MACRO METRICS ---
+    # --- WACC & Holding Period Logic ---
+    stock_stats = []
+    unique_symbols = df['symbol'].unique()
+
+    for sym in unique_symbols:
+        s_buys = buys[buys['symbol'] == sym]
+        s_sells = sells[sells['symbol'] == sym]
+        
+        t_buy_qty = s_buys['qty'].sum()
+        # Adjusted WACC: (Buy Amount + Buy Fees) / Qty
+        gross_buy_amt = (s_buys['qty'] * s_buys['price']).sum()
+        total_buy_fees = sum([calculate_nepse_fees(r.qty * r.price, "BUY") for i, r in s_buys.iterrows()])
+        wacc_adjusted = (gross_buy_amt + total_buy_fees) / t_buy_qty if t_buy_qty > 0 else 0
+        
+        t_sell_qty = s_sells['qty'].sum()
+        net_qty = t_buy_qty - t_sell_qty
+        
+        # Realized P/L Calculation
+        realized_profit = 0
+        if not s_sells.empty:
+            sell_amt = (s_sells['qty'] * s_sells['price']).sum()
+            sell_fees = sum([calculate_nepse_fees(r.qty * r.price, "SELL") for i, r in s_sells.iterrows()])
+            # Realized = (Selling Price - Buy WACC) * Qty - Sell Fees
+            realized_profit = (sell_amt - (t_sell_qty * wacc_adjusted)) - sell_fees
+
+        # Live Data Match
+        ltp = cache[cache['symbol'] == sym]['ltp'].values[0] if sym in cache['symbol'].values else wacc_adjusted
+        prev_close = ltp - (cache[cache['symbol'] == sym]['change'].values[0] if sym in cache['symbol'].values else 0)
+        
+        if net_qty > 0:
+            first_buy = s_buys['date'].min()
+            days_held = (date.today() - first_buy).days
+            invested = net_qty * wacc_adjusted
+            curr_val = net_qty * ltp
+            unrealized = curr_val - invested
+            
+            # CGT Projection
+            cgt_rate = 0.05 if days_held > 365 else 0.075
+            projected_cgt = max(0, unrealized * cgt_rate)
+            
+            stock_stats.append({
+                'Symbol': sym, 'Qty': net_qty, 'WACC': wacc_adjusted, 'LTP': ltp,
+                'Invested': invested, 'Value': curr_val, 'Unrealized': unrealized,
+                'Return%': (unrealized/invested)*100, 'Days': days_held,
+                'BEP': (invested * 1.005 + 25) / net_qty, # Breakeven including Sell Fees
+                'Day_Gain': (ltp - prev_close) * net_qty,
+                'CGT_Est': projected_cgt,
+                'Realized': realized_profit
+            })
+        else:
+            # Completely sold stocks still contribute to Realized P/L
+            stock_stats.append({'Symbol': sym, 'Qty': 0, 'Realized': realized_profit, 'Invested': 0, 'Value': 0})
+
+    s_df = pd.DataFrame(stock_stats)
+    active_df = s_df[s_df['Qty'] > 0].copy()
+
+    # 3. MACRO VIEW (PORTFOLIO WIDE)
+    total_inv = active_df['Invested'].sum()
+    total_val = active_df['Value'].sum()
+    total_unrealized = active_df['Unrealized'].sum()
+    total_realized = s_df['Realized'].sum()
+    total_fees = (df['qty'] * df['price']).sum() * 0.005 # Estimated aggregate friction
+    
+    st.subheader("📊 Macro Portfolio Analytics")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Realized P/L (Cash)", f"Rs {total_realized_cash:,.2f}")
-    m2.metric("Win Rate", f"{win_rate:.1f}%")
-    m3.metric("Total Fees Paid", f"Rs {total_fees_paid:,.2f}", delta="Friction Cost", delta_color="inverse")
-    
-    avg_profit = total_realized_cash / total_trades if total_trades > 0 else 0
-    m4.metric("Avg Profit/Trade", f"Rs {avg_profit:,.0f}")
+    m1.metric("Principal vs Pot", f"Rs {total_val:,.0f}", f"Net: {total_unrealized + total_realized:,.0f}")
+    m2.metric("Total Realized Cash", f"Rs {total_realized:,.0f}", delta="Booked Profit")
+    m3.metric("Friction Cost", f"Rs {total_fees:,.0f}", help="Total Broker + SEBON + DP Fees paid", delta_color="inverse")
+    m4.metric("Net Portfolio Return", f"{((total_unrealized + total_realized)/total_inv*100):.2f}%" if total_inv > 0 else "0%")
 
     st.divider()
 
-    # --- UI: CHARTS ---
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📊 Profit Distribution")
-        if not realized_df.empty:
-            fig = px.bar(realized_df, x='symbol', y='net_realized', color='net_realized',
-                         color_continuous_scale='RdYlGn', title="Cash Booked per Stock")
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No sell history to show charts.")
-
-    with col2:
-        st.subheader("🛡️ Tax & Risk Projection")
-        # Projection of CGT on current profits
-        # (Assuming current unrealized profit is passed or recalculated)
-        st.info("💡 **Pro Tip:** Your win rate is based on closed trades. Focus on increasing your 'Avg Profit per Trade' to cover friction costs.")
+    # 4. EQUITY CURVE & DRAWDOWN
+    if not wealth_history.empty:
+        st.subheader("📈 Wealth Trajectory & Equity Curve")
+        fig_equity = px.area(wealth_history, x='snapshot_date', y='current_value', title="Equity Curve (Total Portfolio Value over Time)")
+        # Max Drawdown Calculation
+        wealth_history['peak'] = wealth_history['current_value'].cummax()
+        wealth_history['drawdown'] = (wealth_history['current_value'] - wealth_history['peak']) / wealth_history['peak']
+        max_dd = wealth_history['drawdown'].min() * 100
         
-    # --- 4. REALIZED HISTORY TABLE ---
-    st.subheader("📜 Realized (Closed) Trades History")
+        st.plotly_chart(fig_equity, use_container_width=True)
+        st.error(f"📉 Historical Max Drawdown: {max_dd:.2f}%")
+
+    st.divider()
+
+    # 5. MICRO VIEW (INDIVIDUAL PERFORMANCE)
+    st.subheader("🔬 Individual Stock Micro-Health")
+    
+    # Add Weightage and Panic Meter
+    active_df['Weight%'] = (active_df['Value'] / total_val) * 100
+    
+    # Logic for Profit Shield
+    active_df['Profit_Shield'] = active_df['Return%'].apply(lambda x: "🛡️ Trailing Stop Recommended" if x > 20 else "Normal")
+
+    # High Density Data Table
     st.dataframe(
-        realized_df[['date', 'symbol', 'qty', 'price', 'buy_cost_basis', 'net_realized']],
+        active_df[['Symbol', 'Qty', 'WACC', 'BEP', 'LTP', 'Weight%', 'Return%', 'Unrealized', 'Day_Gain', 'Days', 'Profit_Shield']],
         use_container_width=True, hide_index=True,
         column_config={
-            "buy_cost_basis": "Buy WACC",
-            "net_realized": st.column_config.NumberColumn("Net Profit (After Fees)", format="Rs %.2f")
+            "Weight%": st.column_config.ProgressColumn("Weightage", format="%.1f%%", min_value=0, max_value=100),
+            "Return%": st.column_config.NumberColumn("ROI%", format="%.2f%%"),
+            "Unrealized": st.column_config.NumberColumn("Unrealized P/L", format="Rs %d"),
+            "Day_Gain": st.column_config.NumberColumn("Today's P/L", format="Rs %d"),
+            "BEP": "Breakeven"
         }
     )
+
+    # 6. RISK & PERFORMANCE ANALYTICS
+    col_risk, col_perf = st.columns(2)
+
+    with col_risk:
+        st.subheader("🛡️ Risk & Decision Metrics")
+        # Panic Meter: Find stocks > 25% weight
+        heavy_stocks = active_df[active_df['Weight%'] > 25]
+        if not heavy_stocks.empty:
+            for _, row in heavy_stocks.iterrows():
+                st.warning(f"🚨 **Panic Meter:** {row['Symbol']} is {row['Weight%']:.1f}% of your portfolio. Consider diversifying.")
+        else:
+            st.success("✅ Concentration Risk: Portfolio is well-diversified.")
+
+        # Realized CGT Projection
+        st.info(f"💾 **Tax Reserve:** Rs {active_df['CGT_Est'].sum():,.2f} (Estimated CGT if sold today)")
+
+    with col_perf:
+        st.subheader("🎯 Self-Improvement Metrics")
+        closed_trades = s_df[s_df['Qty'] == 0]
+        if not closed_trades.empty:
+            win_count = len(closed_trades[closed_trades['Realized'] > 0])
+            win_rate = (win_count / len(closed_trades)) * 100
+            st.write(f"**Win/Loss Ratio:** {win_rate:.1f}%")
+            
+            avg_win = closed_trades[closed_trades['Realized'] > 0]['Realized'].mean()
+            avg_loss = closed_trades[closed_trades['Realized'] < 0]['Realized'].mean()
+            st.write(f"**Avg Win:** Rs {avg_win:,.0f} | **Avg Loss:** Rs {abs(avg_loss) if not np.isnan(avg_loss) else 0:,.0f}")
+        else:
+            st.caption("Not enough closed trades to calculate win/loss metrics.")
+
+    # 7. ASSET ALLOCATION (SECTORAL)
+    st.divider()
+    st.subheader("Sector Allocation")
+    # Note: This requires 'sector' in your cache table. If not present, it will use symbol.
+    sector_col = 'sector' if 'sector' in cache.columns else 'symbol'
+    sector_data = pd.merge(active_df, cache[['symbol', sector_col]], left_on='Symbol', right_on='symbol', how='left')
+    
+    fig_sector = px.sunburst(sector_data, path=[sector_col, 'Symbol'], values='Value', 
+                             title="Portfolio by Sector & Stock", color='Return%',
+                             color_continuous_scale='RdYlGn')
+    st.plotly_chart(fig_sector, use_container_width=True)
+
+    # 8. PERFORMANCE ANALYTICS (CAGR)
+    if not wealth_history.empty and len(wealth_history) > 1:
+        start_val = wealth_history['current_value'].iloc[0]
+        end_val = wealth_history['current_value'].iloc[-1]
+        start_date = pd.to_datetime(wealth_history['snapshot_date'].iloc[0])
+        end_date = pd.to_datetime(wealth_history['snapshot_date'].iloc[-1])
+        years = (end_date - start_date).days / 365.25
+        
+        if years > 0:
+            cagr = ((end_val / start_val) ** (1/years) - 1) * 100
+            st.metric("Portfolio CAGR", f"{cagr:.2f}% per year")
+
+if __name__ == "__main__":
+    render_advanced_view()
