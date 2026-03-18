@@ -15,7 +15,7 @@ def render_page(role):
     try:
         # Fetch raw transactions and market cache
         port_df = conn.query("SELECT * FROM portfolio", ttl=0)
-        cache_df = conn.query("SELECT * FROM cache")
+        cache_df = conn.query("SELECT * FROM cache",ttl=3600)
         
         # Standardize column names to lowercase for Postgres compatibility
         port_df.columns = [c.lower() for c in port_df.columns]
