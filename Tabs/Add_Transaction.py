@@ -31,28 +31,41 @@ def get_current_stock_info(conn, symbol):
         return 0, 0.0, date.today()
 
 def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
-    """Core logic for NEPSE commissions and taxes."""
+    """Updated logic with current NEPSE/SEBON commission tiers."""
     base = qty * price
     
-    # Tiered Broker Commission (NEPSE standard)
-    if base <= 50000: comm_rate = 0.0040
-    elif base <= 500000: comm_rate = 0.0037
-    else: comm_rate = 0.0033
+    # --- CURRENT NEPSE COMMISSION TIERS ---
+    if base <= 50000:
+        comm_rate = 0.0036  # 0.36% (This was your error - was 0.40%)
+    elif base <= 500000:
+        comm_rate = 0.0033  # 0.33%
+    elif base <= 2000000:
+        comm_rate = 0.0031  # 0.31%
+    elif base <= 10000000:
+        comm_rate = 0.0027  # 0.27%
+    else:
+        comm_rate = 0.0024  # 0.24%
     
+    # Calculate Broker Commission (Minimum Rs. 10)
     broker_comm = max(10, base * comm_rate)
+    
+    # SEBON Regulatory Fee (0.015%)
     sebon_fee = base * 0.00015
+    
     dp_fee = 25.0 if include_dp else 0.0
     total_charges = broker_comm + sebon_fee + dp_fee
     
     if trx_type == "BUY":
         total_val = base + total_charges
-        # Breakeven includes estimation for future sell charges (~0.5% + 25 DP)
-        breakeven = (total_val + (total_val * 0.005) + 25) / qty 
+        # Breakeven estimation: includes future sell fees (Comm + SEBON + DP)
+        # Standard estimation factor is approx 0.5% total round-trip cost
+        breakeven = (total_val + (total_val * 0.0045) + 25) / qty 
         return {
             "base": base, "broker": broker_comm, "sebon": sebon_fee, 
             "dp": dp_fee, "fees": total_charges, "total": total_val, "be": breakeven
         }
     else:
+        # Sell Logic
         profit = (price - wacc) * qty
         cgt = max(0, profit * cgt_rate) if profit > 0 else 0
         receivable = base - total_charges - cgt
