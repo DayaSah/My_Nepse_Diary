@@ -5,8 +5,8 @@ def build_portfolio_context():
     """Fetches live DB data and turns it into a readable string for the AIs."""
     conn = st.connection("neon", type="sql")
     try:
-        port_df = conn.query("SELECT * FROM portfolio")
-        cache_df = conn.query("SELECT * FROM cache")
+        port_df = conn.query("SELECT * FROM portfolio", ttl=0)
+        cache_df = conn.query("SELECT * FROM cache", ttl=3600)
         wealth_df = conn.query("SELECT * FROM wealth ORDER BY snapshot_date DESC LIMIT 1")
     except Exception as e:
         return f"Error fetching database: {e}"
