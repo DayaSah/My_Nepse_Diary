@@ -83,7 +83,12 @@ def render_page(role):
                 cgt_val = 0.05 if "5%" in cgt_type else 0.075
 
             st.divider()
-            btn_save = st.button(f"💾 Log {trx_type} Transaction", type="primary", use_container_width=True)
+            # Option 1: Calculation Button
+            btn_calc = st.button("🧮 Calculate Estimation", use_container_width=True)
+            
+            # Option 2: Buy/Average or Sell Log Button
+            log_label = "🚀 Buy / Average Stock" if trx_type == "BUY" else "🔻 Log Sell Transaction"
+            btn_save = st.button(log_label, type="primary", use_container_width=True)
 
     # Calculation Engine
     res = calculate_fees(t_qty, t_price, trx_type, include_dp, user_wacc, cgt_val)
