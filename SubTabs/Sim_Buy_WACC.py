@@ -10,8 +10,8 @@ def render(role):
     
     # Fetch Portfolio
     try:
-        port_df = conn.query("SELECT * FROM portfolio")
-        cache_df = conn.query("SELECT * FROM cache")
+        port_df = conn.query("SELECT * FROM portfolio", ttl=0)
+        cache_df = conn.query("SELECT * FROM cache", ttl=3600)
     except:
         st.error("Failed to fetch database.")
         return
