@@ -1,146 +1,132 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
+import plotly.express as px
 
 def render_page(role):
     st.title("🏦 TMS Command Center")
     st.caption("Central hub for Broker Ledger, Cash Flows, and T+2 Settlements")
 
-    # Initialize the Neon database connection
     conn = st.connection("neon", type="sql")
     
-    # Try loading the tms_trx table
+    # 1. DATA LOADING
     try:
-        # Standardizing all columns to lowercase for Postgres compatibility
-        trx_df = conn.query("SELECT * FROM tms_trx ORDER BY date DESC")
+        trx_df = conn.query("SELECT * FROM tms_trx ORDER BY date DESC", ttl=0)
         trx_df.columns = [c.lower() for c in trx_df.columns]
     except Exception as e:
-        st.error(f"Database error: Please ensure the 'tms_trx' table is created in Neon. {e}")
+        st.error(f"⚠️ Table 'tms_trx' missing in Neon. Please run migration. Error: {e}")
         trx_df = pd.DataFrame()
         
-    # Creating the Nested Tabs
-    tms_tabs = st.tabs([
-        "📊 Dashboard", 
-        "✍️ Add Transactions", 
-        "📜 View Ledger"
-    ])
+    tms_tabs = st.tabs(["📊 Dashboard", "✍️ Add Transactions", "📜 View Ledger"])
     
     # ==========================================
     # TAB 1: THE DASHBOARD
     # ==========================================
     with tms_tabs[0]:
-        st.subheader("💸 TMS Cash Flow & Solvency")
-        
         if not trx_df.empty:
             trx_df["date"] = pd.to_datetime(trx_df["date"])
             
-            # --- CORE FINANCIAL CALCULATIONS ---
-            # Exclude Collateral movements from real cash flow
-            is_collateral_entry = (trx_df["medium"].astype(str).str.upper() == "COLLATERAL") | \
-                                  (trx_df["type"].astype(str).str.upper() == "COLLATERAL LOAD")
+            # Calculations
+            is_collateral = (trx_df["medium"].str.upper() == "COLLATERAL") | \
+                            (trx_df["type"].str.upper() == "COLLATERAL LOAD")
             
-            real_cash_df = trx_df[~is_collateral_entry]
-            
-            # Real Cash In: Deposits + Sales (Positive amounts)
-            cash_in = float(real_cash_df[real_cash_df["amount"] > 0]["amount"].sum())
-            
-            # Real Cash Out: Withdraws + Buys + Fines (Convert negative to positive for display)
-            cash_out = abs(float(real_cash_df[real_cash_df["amount"] < 0]["amount"].sum()))
-            
-            total_charges = float(trx_df["charge"].sum()) if "charge" in trx_df.columns else 0.0
-            
-            # Net Balance Calculation
+            real_cash = trx_df[~is_collateral]
+            cash_in = float(real_cash[real_cash["amount"] > 0]["amount"].sum())
+            cash_out = abs(float(real_cash[real_cash["amount"] < 0]["amount"].sum()))
+            total_charges = float(trx_df["charge"].sum())
             net_balance = (cash_in - cash_out) - total_charges
             
-            # Buying Power Logic
-            base_free_collateral = 10824.0 # Hardcoded base from your previous logic
-            loaded_collateral = float(trx_df[trx_df["type"].astype(str).str.upper() == "COLLATERAL LOAD"]["amount"].sum())
-            total_collateral = base_free_collateral + loaded_collateral
-            
-            # Final Buying Power
+            # Buying Power (Note: Consider moving '10824' to a sidebar setting)
+            base_collateral = 10824.0 
+            loaded_collateral = float(trx_df[trx_df["type"].str.upper() == "COLLATERAL LOAD"]["amount"].sum())
+            total_collateral = base_collateral + loaded_collateral
             buying_power = total_collateral + net_balance
-            
-            # --- UI: MAIN METRICS ---
-            st.markdown("### Account Balances")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Cash In (Deposits/Sales)", f"Rs {cash_in:,.2f}")
-            c2.metric("Cash Out (Buys/Withdraws)", f"Rs {cash_out:,.2f}")
-            c3.metric("Net Balance", f"Rs {net_balance:,.2f}", help="Cash In - Cash Out - Fees")
-            c4.metric("Buying Power", f"Rs {buying_power:,.2f}", help="(Collateral + Net Balance)")
-            
+
+            # UI Metrics
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Cash In", f"Rs {cash_in:,.0f}")
+            m2.metric("Cash Out", f"Rs {cash_out:,.0f}", delta_color="inverse")
+            m3.metric("Net Cash", f"Rs {net_balance:,.0f}")
+            m4.metric("Buying Power", f"Rs {buying_power:,.0f}", help="Available limit for tomorrow's trade")
+
             st.divider()
-            st.markdown("### Collateral & Fees")
-            col1, col2 = st.columns(2)
-            col1.metric("Total Active Collateral", f"Rs {total_collateral:,.2f}", help="Base + Loaded Collateral")
-            col2.metric("Total TMS Charges & Fines", f"Rs {total_charges:,.2f}")
+
+            # Visual: Cash Flow Trend
+            st.subheader("📈 Cash Flow Trend")
+            daily_flow = real_cash.groupby('date')['amount'].sum().reset_index()
+            fig = px.bar(daily_flow, x='date', y='amount', 
+                         color='amount', color_continuous_scale='RdYlGn',
+                         title="Daily Net Cash Movement")
+            st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.info("No TMS transactions found. Go to 'Add Transactions' to record your first ledger entry.")
+            st.info("No data available to display dashboard.")
 
     # ==========================================
-    # TAB 2: ADD TRANSACTIONS
+    # TAB 2: ADD TRANSACTIONS (IMPROVED UX)
     # ==========================================
     with tms_tabs[1]:
         st.subheader("✍️ Log a New Transaction")
         
         if role == "View Only":
-            st.warning("🔒 You are in View Only mode. You cannot add transactions.")
+            st.warning("🔒 Access Denied: Admin role required to log transactions.")
         else:
-            with st.form("add_trx_form"):
-                col1, col2 = st.columns(2)
-                
-                with col1:
+            with st.form("tms_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                with c1:
                     t_date = st.date_input("Transaction Date")
-                    t_stock = st.text_input("Stock Symbol (Optional)")
-                    t_type = st.selectbox("Transaction Type", ["Deposit", "Withdrawal", "Buy", "Sell", "Collateral Load", "Fee"])
-                    
-                with col2:
-                    t_medium = st.selectbox("Medium", ["Bank Transfer", "ConnectIPS", "Collateral", "Cheque", "Other"])
-                    t_amount = st.number_input("Amount (Rs)", help="Use negative (-) for Cash Out (Buys/Withdrawals). Positive for Cash In.")
-                    t_charge = st.number_input("Broker/Bank Charge (Rs)", min_value=0.0)
-                    
-                t_remark = st.text_input("Remark / Description")
-                t_ref = st.text_input("Reference ID")
+                    t_type = st.selectbox("Type", ["Deposit", "Withdrawal", "Buy", "Sell", "Collateral Load", "Fee"])
+                    t_stock = st.text_input("Symbol (If applicable)").upper()
+                with c2:
+                    t_medium = st.selectbox("Medium", ["Bank Transfer", "ConnectIPS", "Collateral", "Cheque"])
+                    raw_amount = st.number_input("Amount (Rs)", min_value=0.0, step=100.0)
+                    t_charge = st.number_input("Broker/Bank Fee", min_value=0.0)
                 
-                submitted = st.form_submit_button("💾 Save to Ledger", type="primary")
+                t_remark = st.text_input("Remarks")
                 
-                if submitted:
+                # AUTO-LOGIC: Handle signs automatically
+                # Buy, Withdrawal, and Fee should be negative flows
+                if t_type in ["Withdrawal", "Buy", "Fee"]:
+                    final_amount = -abs(raw_amount)
+                else:
+                    final_amount = abs(raw_amount)
+
+                if st.form_submit_button("💾 Save Transaction", type="primary"):
                     try:
                         with conn.session as s:
-                            sql = text("""
-                                INSERT INTO tms_trx (date, stock, type, medium, amount, charge, remark, reference) 
-                                VALUES (:date, :stock, :type, :medium, :amount, :charge, :remark, :reference)
-                            """)
-                            s.execute(sql, {
-                                "date": t_date,
-                                "stock": t_stock.upper(),
-                                "type": t_type,
-                                "medium": t_medium,
-                                "amount": t_amount,
-                                "charge": t_charge,
-                                "remark": t_remark,
-                                "reference": t_ref
-                            })
-                          
-                            audit_sql = text("INSERT INTO audit_log (action, symbol, details) VALUES (:act, :sym, :det)")
-                            s.execute(audit_sql, {
-                                "act": f"TMS_{t_type.upper().replace(' ', '_')}",
-                                "sym": t_stock.upper() if t_stock else "-",
-                                "det": f"{t_type} of Rs {t_amount} via {t_medium}"
-                            })
+                            # 1. Insert into Ledger
+                            s.execute(text("""
+                                INSERT INTO tms_trx (date, stock, type, medium, amount, charge, remark) 
+                                VALUES (:d, :s, :t, :m, :a, :c, :r)
+                            """), {"d":t_date, "s":t_stock, "t":t_type, "m":t_medium, "a":final_amount, "c":t_charge, "r":t_remark})
                             
+                            # 2. Insert into Audit Log
+                            s.execute(text("INSERT INTO audit_log (action, details) VALUES (:act, :det)"), 
+                                      {"act": f"TMS_{t_type.upper()}", "det": f"{t_stock} {t_type} Rs {final_amount}"})
                             s.commit()
-                        st.success("✅ Transaction saved successfully!")
+                        st.success(f"Registered {t_type} of Rs {final_amount}")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error saving transaction: {e}")
+                        st.error(f"Error: {e}")
 
     # ==========================================
-    # TAB 3: VIEW LEDGER
+    # TAB 3: VIEW LEDGER (BETTER FORMATTING)
     # ==========================================
     with tms_tabs[2]:
-        st.subheader("📜 Full Transaction Ledger")
+        st.subheader("📜 Broker Ledger")
         if not trx_df.empty:
-            st.dataframe(trx_df, use_container_width=True, hide_index=True)
+            # Using column_config to make it look professional
+            st.dataframe(
+                trx_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "amount": st.column_config.NumberColumn("Amount", format="Rs %.2f"),
+                    "charge": st.column_config.NumberColumn("Fee", format="Rs %.2f"),
+                    "date": st.column_config.DateColumn("Date"),
+                    "type": "Action",
+                    "medium": "Payment Via"
+                }
+            )
         else:
             st.info("Ledger is empty.")
