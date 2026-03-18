@@ -4,34 +4,57 @@ from sqlalchemy import text
 from datetime import date
 
 def get_current_stock_info(conn, symbol):
-    """Calculates current quantity, WACC, and First Buy Date for a specific stock."""
+    """Calculates chronological quantity, Rolling WACC, and Holding Period."""
     if not symbol: return 0, 0.0, date.today()
     
     try:
-        df = conn.query(f"SELECT * FROM portfolio WHERE symbol = '{symbol.upper()}'", ttl=0)
+        # 1. Fetch all trades for this stock, sorted from OLDEST to NEWEST
+        df = conn.query(f"SELECT * FROM portfolio WHERE symbol = '{symbol.upper()}' ORDER BY date ASC", ttl=0)
         if df.empty: return 0, 0.0, date.today()
         
         df.columns = [c.lower() for c in df.columns]
         df['date'] = pd.to_datetime(df['date']).dt.date
         
-        buys = df[df['transaction_type'].str.upper() == 'BUY'].copy()
-        sells = df[df['transaction_type'].str.upper() == 'SELL'].copy()
-        
-        total_buy_qty = buys['qty'].sum()
-        
-        # --- THE NEW WACC LOGIC ---
-        if 'net_amount' in buys.columns:
-            buys['net_amount'] = buys['net_amount'].fillna(buys['qty'] * buys['price'])
-            total_buy_cost = buys['net_amount'].sum()
+        # Ensure net_amount exists to avoid crashes on old data
+        if 'net_amount' not in df.columns:
+            df['net_amount'] = df['qty'] * df['price']
         else:
-            total_buy_cost = (buys['qty'] * buys['price']).sum()
+            df['net_amount'] = df['net_amount'].fillna(df['qty'] * df['price'])
             
-        wacc = total_buy_cost / total_buy_qty if total_buy_qty > 0 else 0.0
-        net_qty = total_buy_qty - sells['qty'].sum()
+        current_qty = 0
+        total_invested = 0.0
+        first_buy_date = date.today()
         
-        first_buy_date = buys['date'].min() if not buys.empty else date.today()
+        # 2. Chronological Ledger Loop
+        for index, row in df.iterrows():
+            if row['transaction_type'].upper() == 'BUY':
+                # If we are buying from a 0 balance, reset the Holding Date!
+                if current_qty <= 0:
+                    first_buy_date = row['date']
+                    current_qty = 0
+                    total_invested = 0.0
+                
+                current_qty += row['qty']
+                total_invested += row['net_amount']
+                
+            elif row['transaction_type'].upper() == 'SELL':
+                # Find out what the WACC was AT THE TIME OF SALE
+                current_wacc = total_invested / current_qty if current_qty > 0 else 0.0
+                
+                # Deduct the shares and the invested capital
+                current_qty -= row['qty']
+                total_invested -= (row['qty'] * current_wacc)
+                
+                # THE MAGIC: If we sold everything, wipe the slate clean!
+                if current_qty <= 0:
+                    current_qty = 0
+                    total_invested = 0.0
+                    
+        # 3. Final Current WACC calculation
+        final_wacc = total_invested / current_qty if current_qty > 0 else 0.0
         
-        return net_qty, wacc, first_buy_date
+        return current_qty, final_wacc, first_buy_date
+        
     except Exception as e:
         return 0, 0.0, date.today()
 
