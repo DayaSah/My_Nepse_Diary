@@ -196,7 +196,7 @@ def render_page(role):
     st.markdown("---")
     st.markdown("### 🕒 Recent Entries")
     try:
-        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price FROM portfolio ORDER BY id DESC LIMIT 5", ttl=0)
+        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price FROM portfolio ORDER BY date DESC LIMIT 5", ttl=0)
         st.dataframe(recent, use_container_width=True, hide_index=True)
     except:
         st.caption("No records found in the ledger.")
