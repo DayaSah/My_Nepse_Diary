@@ -4,151 +4,78 @@ import plotly.express as px
 
 def render_page(role):
     st.title("💼 My Portfolio")
-    st.caption("Real-time view of your active holdings, WACC, and Unrealized P/L.")
+    st.caption("Active holdings and current market standing.")
 
-    # Initialize Database Connection
     conn = st.connection("neon", type="sql")
 
-    # ==========================================
-    # 1. FETCH AND PROCESS DATA
-    # ==========================================
     try:
-        # Fetch raw transactions and market cache
         port_df = conn.query("SELECT * FROM portfolio", ttl=0)
-        cache_df = conn.query("SELECT * FROM cache",ttl=3600)
-        
-        # Standardize column names to lowercase for Postgres compatibility
+        cache_df = conn.query("SELECT * FROM cache", ttl=600)
         port_df.columns = [c.lower() for c in port_df.columns]
-        if not cache_df.empty:
-            cache_df.columns = [c.lower() for c in cache_df.columns]
-            
-    except Exception as e:
-        st.error(f"Database error: {e}")
-        port_df = pd.DataFrame()
-        cache_df = pd.DataFrame()
+        if not cache_df.empty: cache_df.columns = [c.lower() for c in cache_df.columns]
+    except:
+        st.error("Connection Error"); return
 
     if port_df.empty:
-        st.info("Your portfolio is currently empty. Go to 'Add Trade' to log your first transaction!")
-        return
+        st.info("Portfolio is empty."); return
 
-    # --- WACC & Net Holdings Calculation Engine ---
-    # Ensure datatypes for math
-    port_df['qty'] = pd.to_numeric(port_df['qty'])
-    port_df['price'] = pd.to_numeric(port_df['price'])
-
-    # Separate Buys and Sells
+    # --- Calculation Engine ---
     buys = port_df[port_df['transaction_type'].str.upper() == 'BUY']
     sells = port_df[port_df['transaction_type'].str.upper() == 'SELL']
 
-    # Group Buys to calculate Total Buy Qty and WACC
-    if not buys.empty:
-        buy_grouped = buys.groupby('symbol').apply(
-            lambda x: pd.Series({
-                'total_buy_qty': x['qty'].sum(),
-                'total_buy_cost': (x['qty'] * x['price']).sum()
-            })
-        ).reset_index()
-        buy_grouped['wacc'] = buy_grouped['total_buy_cost'] / buy_grouped['total_buy_qty']
-    else:
-        buy_grouped = pd.DataFrame(columns=['symbol', 'total_buy_qty', 'total_buy_cost', 'wacc'])
+    # WACC Calculation
+    buy_grouped = buys.groupby('symbol').apply(
+        lambda x: pd.Series({'t_qty': x['qty'].sum(), 't_cost': (x['qty'] * x['price']).sum()})
+    ).reset_index()
+    buy_grouped['wacc'] = buy_grouped['t_cost'] / buy_grouped['t_qty']
 
-    # Group Sells to calculate Total Sell Qty
-    if not sells.empty:
-        sell_grouped = sells.groupby('symbol').apply(
-            lambda x: pd.Series({
-                'total_sell_qty': x['qty'].sum()
-            })
-        ).reset_index()
-    else:
-        sell_grouped = pd.DataFrame(columns=['symbol', 'total_sell_qty'])
+    # Net Qty
+    sell_qty = sells.groupby('symbol')['qty'].sum().reset_index().rename(columns={'qty': 's_qty'})
+    holdings = pd.merge(buy_grouped, sell_qty, on='symbol', how='left').fillna(0)
+    holdings['net_qty'] = holdings['t_qty'] - holdings['s_qty']
+    active = holdings[holdings['net_qty'] > 0].copy()
 
-    # Merge Buys and Sells to find Net Qty
-    holdings = pd.merge(buy_grouped, sell_grouped, on='symbol', how='left').fillna(0)
-    holdings['net_qty'] = holdings['total_buy_qty'] - holdings['total_sell_qty']
+    # Merge LTP
+    if not cache_df.empty:
+        active = pd.merge(active, cache_df[['symbol', 'ltp']], on='symbol', how='left').fillna(0)
+    else: active['ltp'] = active['wacc']
 
-    # Filter out stocks that have been completely sold (Net Qty <= 0)
-    active_holdings = holdings[holdings['net_qty'] > 0].copy()
-
-    if active_holdings.empty:
-        st.info("You have sold all your active holdings. Check the 'History' tab for realized P/L.")
-        return
-
-    # --- Merge with Live Market Data ---
-    if not cache_df.empty and 'ltp' in cache_df.columns:
-        active_holdings = pd.merge(active_holdings, cache_df[['symbol', 'ltp', 'change']], on='symbol', how='left').fillna(0)
-    else:
-        active_holdings['ltp'] = active_holdings['wacc'] # Fallback if no market data
-        active_holdings['change'] = 0
-
-    # --- Calculate Financials ---
-    active_holdings['total_invested'] = active_holdings['net_qty'] * active_holdings['wacc']
-    active_holdings['current_value'] = active_holdings['net_qty'] * active_holdings['ltp']
-    active_holdings['unrealized_pl'] = active_holdings['current_value'] - active_holdings['total_invested']
-    active_holdings['return_pct'] = (active_holdings['unrealized_pl'] / active_holdings['total_invested']) * 100
-
-    # ==========================================
-    # 2. PORTFOLIO SUMMARY METRICS
-    # ==========================================
-    st.markdown("### 📈 Portfolio Summary")
+    # Metrics
+    active['invested'] = active['net_qty'] * active['wacc']
+    active['current_val'] = active['net_qty'] * active['ltp']
+    active['pl_amt'] = active['current_val'] - active['invested']
+    active['pl_pct'] = (active['pl_amt'] / active['invested']) * 100
     
-    total_invested = active_holdings['total_invested'].sum()
-    total_value = active_holdings['current_value'].sum()
-    total_pl = active_holdings['unrealized_pl'].sum()
-    total_return_pct = (total_pl / total_invested) * 100 if total_invested > 0 else 0
+    # NEW: Breakeven & Weightage
+    total_portfolio_value = active['current_val'].sum()
+    active['weight_pct'] = (active['current_val'] / total_portfolio_value) * 100
+    # Breakeven includes approx 0.5% sell side fees
+    active['breakeven'] = (active['wacc'] * 1.005) + (25 / active['net_qty'])
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Invested (WACC)", f"Rs {total_invested:,.2f}")
-    c2.metric("Current Market Value", f"Rs {total_value:,.2f}")
-    
-    # Color code P/L
-    pl_color = "normal" if total_pl >= 0 else "inverse"
-    c3.metric("Unrealized P/L", f"Rs {total_pl:,.2f}", delta=f"{total_return_pct:.2f}%", delta_color=pl_color)
-    
-    active_tickers = len(active_holdings)
-    c4.metric("Active Positions", f"{active_tickers} Stocks")
+    # --- UI: Summary Metrics ---
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Invested", f"Rs {active['invested'].sum():,.0f}")
+    m2.metric("Market Value", f"Rs {total_portfolio_value:,.0f}")
+    pl_total = active['pl_amt'].sum()
+    m3.metric("Unrealized P/L", f"Rs {pl_total:,.0f}", f"{(pl_total/active['invested'].sum()*100):.2f}%")
+    m4.metric("Stocks", len(active))
 
     st.divider()
 
-    # ==========================================
-    # 3. VISUALIZATIONS & DETAILED TABLE
-    # ==========================================
-    col1, col2 = st.columns([1, 2])
+    # --- UI: Navigation Button to Advanced ---
+    if st.button("🔍 View Advanced Portfolio Analytics", use_container_width=True, type="primary"):
+        st.info("Go to 'SubTabs -> Advanced Portfolio' for deep metrics.")
 
-    with col1:
-        st.markdown("#### Asset Allocation")
-        # Pie chart showing how the portfolio is distributed
-        fig = px.pie(active_holdings, values='current_value', names='symbol', hole=0.4)
-        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=350, showlegend=False)
-        fig.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.markdown("#### 📋 Detailed Holdings")
-        
-        # Prepare table for display
-        display_df = active_holdings[['symbol', 'net_qty', 'wacc', 'ltp', 'total_invested', 'current_value', 'unrealized_pl', 'return_pct']].copy()
-        display_df.rename(columns={
-            'symbol': 'Symbol',
-            'net_qty': 'Qty',
-            'wacc': 'WACC (Rs)',
-            'ltp': 'LTP (Rs)',
-            'total_invested': 'Invested (Rs)',
-            'current_value': 'Value (Rs)',
-            'unrealized_pl': 'P/L (Rs)',
-            'return_pct': 'Return %'
-        }, inplace=True)
-
-        # Apply Streamlit's native dataframe formatting for beautiful UI
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "WACC (Rs)": st.column_config.NumberColumn(format="%.2f"),
-                "LTP (Rs)": st.column_config.NumberColumn(format="%.2f"),
-                "Invested (Rs)": st.column_config.NumberColumn(format="%.2f"),
-                "Value (Rs)": st.column_config.NumberColumn(format="%.2f"),
-                "P/L (Rs)": st.column_config.NumberColumn(format="%.2f"),
-                "Return %": st.column_config.NumberColumn(format="%.2f %%"),
-            }
-        )
+    # --- UI: Tables ---
+    st.subheader("📋 Current Holdings")
+    display_df = active[['symbol', 'net_qty', 'wacc', 'breakeven', 'ltp', 'weight_pct', 'pl_amt', 'pl_pct']].copy()
+    
+    st.dataframe(
+        display_df, use_container_width=True, hide_index=True,
+        column_config={
+            "wacc": "WACC", "ltp": "LTP", "breakeven": "BEP",
+            "weight_pct": st.column_config.ProgressColumn("Weight %", format="%.1f%%", min_value=0, max_value=100),
+            "pl_pct": st.column_config.NumberColumn("Return %", format="%.2f%%"),
+            "pl_amt": st.column_config.NumberColumn("Profit/Loss", format="Rs %.2f")
+        }
+    )
