@@ -8,10 +8,10 @@ def render_page(role):
     
     # 1. Load All Data using fast SQL Queries
     try:
-        port = conn.query("SELECT * FROM portfolio")
-        cache = conn.query("SELECT * FROM cache")
-        hist = conn.query("SELECT * FROM history")
-        wl = conn.query("SELECT * FROM watchlist")
+        port = conn.query("SELECT * FROM portfolio",ttl=0)
+        cache = conn.query("SELECT * FROM cache",ttl=3600)
+        hist = conn.query("SELECT * FROM history",ttl=0)
+        wl = conn.query("SELECT * FROM watchlist",ttl=0)
     except Exception as e:
         st.error(f"Database connection error: {e}")
         port = pd.DataFrame()
