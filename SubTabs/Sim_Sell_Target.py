@@ -7,7 +7,7 @@ def render(role):
 
     conn = st.connection("neon", type="sql")
     try:
-        port_df = conn.query("SELECT * FROM portfolio")
+        port_df = conn.query("SELECT * FROM portfolio", ttl=0)
     except:
         return
 
