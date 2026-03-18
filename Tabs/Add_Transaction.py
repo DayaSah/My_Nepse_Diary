@@ -219,7 +219,7 @@ def render_page(role):
     st.markdown("### 🕒 Recent Entries")
     try:
         # Changed the query to fetch the newest data via DATE
-        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks FROM portfolio ORDER BY date DESC LIMIT 5", ttl=0)
+        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
         if not recent.empty:
             st.dataframe(recent, use_container_width=True, hide_index=True)
         else:
