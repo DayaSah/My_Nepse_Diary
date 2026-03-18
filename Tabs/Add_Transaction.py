@@ -31,7 +31,7 @@ def get_current_stock_info(conn, symbol):
         return 0, 0.0, date.today()
 
 def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
-    """Updated logic with current NEPSE/SEBON commission tiers."""
+    """Updated logic with current NEPSE/SEBON commission tiers and correct NEPSE CGT rules."""
     base = qty * price
     
     # --- CURRENT NEPSE COMMISSION TIERS ---
@@ -64,10 +64,22 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
             "dp": dp_fee, "fees": total_charges, "total": total_val, "be": breakeven
         }
     else:
-        # Sell Logic
-        profit = (price - wacc) * qty
+        # --- FIXED SELL LOGIC FOR NEPSE ---
+        # 1. Deduct selling fees from the gross amount to get the Net Sell Value
+        net_sell_value = base - total_charges
+        
+        # 2. Total cost based on user's WACC (WACC must include historical buy-side fees)
+        total_buy_cost = wacc * qty
+        
+        # 3. Calculate actual taxable NEPSE profit
+        profit = net_sell_value - total_buy_cost
+        
+        # 4. Calculate CGT (Only if profit is greater than 0)
         cgt = max(0, profit * cgt_rate) if profit > 0 else 0
-        receivable = base - total_charges - cgt
+        
+        # 5. Final Receivable amount
+        receivable = net_sell_value - cgt
+        
         return {
             "base": base, "broker": broker_comm, "sebon": sebon_fee, 
             "dp": dp_fee, "fees": total_charges, "total": receivable, "cgt": cgt, "profit": profit
