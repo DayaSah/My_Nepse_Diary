@@ -38,79 +38,114 @@ def render_page(role):
         return
 
     # ==========================================
-    # 2. CALCULATE ACTIVE HOLDINGS & WACC
+    # 2. CALCULATE ROLLING LEDGER (WACC & REALIZED P/L)
     # ==========================================
-    port['qty'] = pd.to_numeric(port['qty'], errors='coerce').fillna(0)
-    port['price'] = pd.to_numeric(port['price'], errors='coerce').fillna(0)
-
-    buys = port[port['transaction_type'].str.upper() == 'BUY'].copy()
-    sells = port[port['transaction_type'].str.upper() == 'SELL'].copy()
-
-    if buys.empty:
-        st.warning("No BUY transactions found. Add some to view your portfolio.")
+    if port.empty:
+        st.info("Portfolio is empty. Go to the 'Add Transaction' tab to start logging trades.")
         return
 
-    # Calculate Total Cost and WACC
-    buys['cost'] = buys['qty'] * buys['price']
-    holdings = buys.groupby('symbol').agg({'qty': 'sum', 'cost': 'sum'}).reset_index()
-    holdings['wacc'] = holdings['cost'] / holdings['qty']
+    # Sort chronologically: Sells before Buys on the same day
+    port['date'] = pd.to_datetime(port['date'])
+    port['type_sort'] = port['transaction_type'].apply(lambda x: 0 if str(x).upper() == 'SELL' else 1)
+    port = port.sort_values(by=['date', 'type_sort']).reset_index(drop=True)
 
-    # Subtract Sells to find Net Active Quantity
-    if not sells.empty:
-        sold = sells.groupby('symbol')['qty'].sum().reset_index().rename(columns={'qty': 'sold_qty'})
-        holdings = pd.merge(holdings, sold, on='symbol', how='left').fillna(0)
-        holdings['net_qty'] = holdings['qty'] - holdings['sold_qty']
-    else:
-        holdings['net_qty'] = holdings['qty']
+    portfolio_state = {}
+    realized_pl = 0.0
+    realized_inv = 0.0
+    realized_recv = 0.0
+    best_trade_val = -float('inf')
+    best_trade_sym = "-"
 
-    # Filter only stocks you currently own
-    active = holdings[holdings['net_qty'] > 0].copy()
+    for _, row in port.iterrows():
+        sym = str(row['symbol']).upper()
+        qty = float(row['qty'])
+        trx = str(row['transaction_type']).upper()
+        
+        # Safely get net_amount (fallback to base price if old data lacks it)
+        if 'net_amount' in row and pd.notnull(row['net_amount']):
+            net_amt = float(row['net_amount'])
+        else:
+            net_amt = float(row['qty'] * row['price'])
+            
+        if sym not in portfolio_state:
+            portfolio_state[sym] = {'qty': 0, 'invested': 0.0}
+            
+        curr_qty = portfolio_state[sym]['qty']
+        curr_inv = portfolio_state[sym]['invested']
+        wacc = curr_inv / curr_qty if curr_qty > 0 else 0.0
+        
+        if trx == 'BUY':
+            if curr_qty <= 0:
+                portfolio_state[sym]['invested'] = net_amt
+                portfolio_state[sym]['qty'] = qty
+            else:
+                portfolio_state[sym]['invested'] += net_amt
+                portfolio_state[sym]['qty'] += qty
+                
+        elif trx == 'SELL':
+            sell_wacc = wacc
+            cost_of_goods_sold = qty * sell_wacc
+            profit = net_amt - cost_of_goods_sold  # Net Amount on a Sell is what you RECEIVE after tax/fees
+            
+            realized_pl += profit
+            realized_inv += cost_of_goods_sold
+            realized_recv += net_amt
+            
+            # Track Best Trade
+            if profit > best_trade_val:
+                best_trade_val = profit
+                best_trade_sym = sym
+                
+            portfolio_state[sym]['qty'] -= qty
+            portfolio_state[sym]['invested'] -= cost_of_goods_sold
+            
+            # Zero-Reset Logic
+            if portfolio_state[sym]['qty'] <= 0:
+                portfolio_state[sym]['qty'] = 0
+                portfolio_state[sym]['invested'] = 0.0
+
+    # Extract Active Holdings into DataFrame
+    active_records = []
+    for sym, data in portfolio_state.items():
+        if data['qty'] > 0:
+            active_records.append({
+                'symbol': sym,
+                'net_qty': data['qty'],
+                'wacc': data['invested'] / data['qty'],
+                'total_cost': data['invested']
+            })
+            
+    active = pd.DataFrame(active_records)
 
     # Merge with Live Market Data (Cache)
     if not active.empty and not cache.empty:
         df = pd.merge(active, cache, on="symbol", how="left").fillna(0)
         df['ltp'] = pd.to_numeric(df['ltp'], errors='coerce').fillna(0)
         df['change'] = pd.to_numeric(df['change'], errors='coerce').fillna(0)
-        # If LTP is 0 (missing cache), fallback to WACC so net worth doesn't drop to 0
         df['ltp'] = df.apply(lambda x: x['wacc'] if x['ltp'] == 0 else x['ltp'], axis=1)
     else:
         df = active.copy()
-        df['ltp'] = df['wacc']
-        df['change'] = 0
+        if not df.empty:
+            df['ltp'] = df['wacc']
+            df['change'] = 0
 
     # ==========================================
     # 3. METRIC CALCULATIONS
     # ==========================================
-    
-    # A. Current Holdings (Unrealized)
-    curr_inv = (df['net_qty'] * df['wacc']).sum() if not df.empty else 0
+    curr_inv = df['total_cost'].sum() if not df.empty else 0
     curr_val = (df['net_qty'] * df['ltp']).sum() if not df.empty else 0
     day_change = (df['net_qty'] * df['change']).sum() if not df.empty else 0
     
     curr_pl = curr_val - curr_inv
     curr_ret = (curr_pl / curr_inv * 100) if curr_inv > 0 else 0
 
-    # B. Closed Holdings (Realized History)
-    realized_pl = 0
-    realized_inv = 0
-    realized_recv = 0
-    
-    if not hist.empty:
-        hist['sold_qty'] = pd.to_numeric(hist.get('sold_qty', 0), errors='coerce').fillna(0)
-        hist['wacc'] = pd.to_numeric(hist.get('wacc', 0), errors='coerce').fillna(0)
-        hist['sell_price'] = pd.to_numeric(hist.get('sell_price', 0), errors='coerce').fillna(0)
-        hist['realized_profit'] = pd.to_numeric(hist.get('realized_profit', 0), errors='coerce').fillna(0)
-
-        realized_pl = hist['realized_profit'].sum()
-        realized_inv = (hist['sold_qty'] * hist['wacc']).sum()
-        realized_recv = (hist['sold_qty'] * hist['sell_price']).sum()
-
     realized_ret = (realized_pl / realized_inv * 100) if realized_inv > 0 else 0
 
-    # C. Lifetime Stats
     lifetime_invested = curr_inv + realized_inv
     lifetime_received = realized_recv 
     net_exposure = lifetime_received - lifetime_invested 
+    
+    best_stock = f"{best_trade_sym} (+Rs {best_trade_val:.0f})" if best_trade_sym != "-" else "-" 
 
     # ==========================================
     # 4. DASHBOARD UI RENDER
