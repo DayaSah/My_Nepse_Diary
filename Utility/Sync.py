@@ -1,8 +1,9 @@
 import os
+import time
 import requests
 import pandas as pd
 from sqlalchemy import create_engine, text
-from datetime import date
+from datetime import datetime, timedelta, timezone
 
 # ==========================================
 # 1. DATABASE CONNECTION MANAGER
@@ -48,22 +49,32 @@ def send_telegram_message(message):
 def run_sync(headless=False):
     engine = get_engine()
     
-    # A. Fetch all symbols from Portfolio and Watchlist
+    # A. Safely Fetch all symbols from Portfolio, History, and Watchlist
+    symbols_list = []
     with engine.connect() as conn:
-        port_df = pd.read_sql("SELECT DISTINCT symbol FROM portfolio", conn)
-        wl_df = pd.read_sql("SELECT DISTINCT symbol FROM watchlist", conn)
+        for table in ['portfolio', 'history', 'watchlist']:
+            try:
+                df = pd.read_sql(f"SELECT DISTINCT symbol FROM {table}", conn)
+                symbols_list.extend(df['symbol'].tolist())
+            except Exception:
+                pass # Table might not exist yet, skip gracefully
         
-    symbols = set(port_df['symbol'].tolist() + wl_df['symbol'].tolist())
-    symbols = [s.strip().upper() for s in symbols if s and s.strip() != '-']
+    # Remove duplicates, empty strings, and clean text
+    symbols = set([s.strip().upper() for s in symbols_list if s and str(s).strip() not in ('-', 'N/A')])
 
     if not symbols:
         if not headless:
             import streamlit as st
-            st.warning("No symbols found in portfolio or watchlist to sync.")
+            st.warning("No symbols found in portfolio, history, or watchlist to sync.")
         return
 
     # B. Fetch Live Market Data from Chukul API
     updated_data = []
+    
+    # Define Nepal Timezone for accurate timestamps
+    np_tz = timezone(timedelta(hours=5, minutes=45))
+    current_np_time = datetime.now(np_tz).strftime("%Y-%m-%d %H:%M")
+
     for sym in symbols:
         try:
             url = f"https://chukul.com/api/data/v2/market-summary/bysymbol/?symbol={sym}"
@@ -73,13 +84,14 @@ def run_sync(headless=False):
                 data = resp.json()
                 if data and isinstance(data, list) and len(data) > 0:
                     item = data[0]
-                    # ONLY extracting the essential values needed
                     updated_data.append({
                         "symbol": sym,
                         "ltp": float(item.get("close", 0)),
                         "change": float(item.get("point_change", 0)),
-                        "last_updated": item.get("date", str(date.today()))
+                        "last_updated": current_np_time
                     })
+            # Sleep briefly to prevent API rate-limiting/IP Bans
+            time.sleep(0.3) 
         except Exception as e:
             print(f"Failed to fetch {sym}: {e}")
 
@@ -109,13 +121,13 @@ def run_sync(headless=False):
     take_wealth_snapshot(engine)
 
     # E. Handle Notifications based on environment
-    msg = f"✅ *NEPSE Terminal Sync Complete*\n\n📊 Successfully updated market data for {len(updated_data)} symbols and took the daily Wealth Snapshot."
+    msg = f"✅ *NEPSE Terminal Sync Complete*\n\n📊 Successfully updated market data for {len(updated_data)} symbols and calculated the daily Wealth Snapshot."
     if headless:
         send_telegram_message(msg)
         print("Sync complete. Message sent.")
     else:
         import streamlit as st
-        st.success("Database successfully synchronized with Chukul API!")
+        st.success(f"Database successfully synchronized with Chukul API for {len(updated_data)} stocks!")
 
 # ==========================================
 # 4. WEALTH SNAPSHOT CALCULATOR
@@ -124,8 +136,11 @@ def take_wealth_snapshot(engine):
     """Calculates total net worth and logs it for the charts."""
     try:
         with engine.connect() as conn:
-            port_df = pd.read_sql("SELECT * FROM portfolio", conn)
-            cache_df = pd.read_sql("SELECT * FROM cache", conn)
+            try:
+                port_df = pd.read_sql("SELECT * FROM portfolio", conn)
+                cache_df = pd.read_sql("SELECT * FROM cache", conn)
+            except Exception:
+                return # Tables don't exist yet
             
         if port_df.empty: return
 
@@ -133,11 +148,12 @@ def take_wealth_snapshot(engine):
         port_df['qty'] = pd.to_numeric(port_df['qty'])
         port_df['price'] = pd.to_numeric(port_df['price'])
         
-        # Calculate Active Holdings WACC
-        buys = port_df[port_df['transaction_type'].str.upper() == 'BUY']
-        sells = port_df[port_df['transaction_type'].str.upper() == 'SELL']
+        # Calculate Active Holdings WACC (Optimized Pandas)
+        buys = port_df[port_df['transaction_type'].str.upper() == 'BUY'].copy()
+        sells = port_df[port_df['transaction_type'].str.upper() == 'SELL'].copy()
         
-        buy_grouped = buys.groupby('symbol').apply(lambda x: pd.Series({'qty': x['qty'].sum(), 'cost': (x['qty']*x['price']).sum()})).reset_index()
+        buys['cost'] = buys['qty'] * buys['price']
+        buy_grouped = buys.groupby('symbol').agg({'qty': 'sum', 'cost': 'sum'}).reset_index()
         buy_grouped['wacc'] = buy_grouped['cost'] / buy_grouped['qty']
         
         sell_grouped = sells.groupby('symbol')['qty'].sum().reset_index().rename(columns={'qty': 'sold_qty'})
@@ -155,8 +171,10 @@ def take_wealth_snapshot(engine):
         total_invested = (active['net_qty'] * active['wacc']).sum()
         current_value = (active['net_qty'] * active['ltp']).sum()
 
-        # Save to DB
-        today = str(date.today())
+        # Save to DB (Using exact Nepal Time Date)
+        np_tz = timezone(timedelta(hours=5, minutes=45))
+        today_date = str(datetime.now(np_tz).date())
+        
         with engine.begin() as conn:
             sql = text("""
                 INSERT INTO wealth (snapshot_date, total_investment, current_value)
@@ -164,6 +182,7 @@ def take_wealth_snapshot(engine):
                 ON CONFLICT (snapshot_date) DO UPDATE 
                 SET total_investment = EXCLUDED.total_investment, current_value = EXCLUDED.current_value
             """)
-            conn.execute(sql, {"date": today, "inv": total_invested, "val": current_value})
+            conn.execute(sql, {"date": today_date, "inv": total_invested, "val": current_value})
+            
     except Exception as e:
         print(f"Wealth Snapshot Failed: {e}")
