@@ -57,5 +57,5 @@ The system relies on six core tables to manage state and historical data:
 
 **1. Clone the repository**
 ```bash
-git clone https://github.com/DayaSah/My_Nepse_Diary.git(https://github.com/DayaSah/My_Nepse_Diary.git)
+git clone https://github.com/DayaSah/My_Nepse_Diary.git
 cd My_Nepse_Diary
