@@ -36,7 +36,7 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
     
     # --- CURRENT NEPSE COMMISSION TIERS ---
     if base <= 50000:
-        comm_rate = 0.0036  # 0.36% (This was your error - was 0.40%)
+        comm_rate = 0.0036  # 0.36%
     elif base <= 500000:
         comm_rate = 0.0033  # 0.33%
     elif base <= 2000000:
@@ -58,7 +58,6 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
     if trx_type == "BUY":
         total_val = base + total_charges
         # Breakeven estimation: includes future sell fees (Comm + SEBON + DP)
-        # Standard estimation factor is approx 0.5% total round-trip cost
         breakeven = (total_val + (total_val * 0.0045) + 25) / qty 
         return {
             "base": base, "broker": broker_comm, "sebon": sebon_fee, 
@@ -94,6 +93,9 @@ def render_page(role):
             t_price = c2.number_input("Execution Price (Rs)", min_value=1.0, step=0.1, value=100.0)
             
             t_date = st.date_input("Transaction Date", value=date.today())
+            
+            # ADDED: Remarks Field for both BUY and SELL
+            t_remarks = st.text_input("Remarks / Notes", placeholder="e.g., Bought on dip, IPO sale, etc.")
 
             # --- SELL SIDE SPECIFIC LOGIC ---
             user_wacc = calc_wacc
@@ -171,11 +173,18 @@ def render_page(role):
         else:
             try:
                 with conn.session as s:
-                    # 1. Insert into Portfolio
+                    # 1. Insert into Portfolio (MODIFIED TO INCLUDE REMARKS)
                     s.execute(text("""
-                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type) 
-                        VALUES (:d, :s, :q, :p, :t)
-                    """), {"d": t_date, "s": t_symbol, "q": t_qty, "p": t_price, "t": trx_type})
+                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks) 
+                        VALUES (:d, :s, :q, :p, :t, :r)
+                    """), {
+                        "d": t_date, 
+                        "s": t_symbol, 
+                        "q": t_qty, 
+                        "p": t_price, 
+                        "t": trx_type,
+                        "r": t_remarks  # Pass the new remarks field
+                    })
                     
                     # 2. Audit Logging
                     s.execute(text("""
@@ -184,7 +193,7 @@ def render_page(role):
                     """), {
                         "act": f"TRADE_{trx_type}", 
                         "sym": t_symbol, 
-                        "det": f"{t_qty} units @ Rs {t_price} | Net: Rs {res['total']:.2f}"
+                        "det": f"{t_qty} units @ Rs {t_price} | Net: Rs {res['total']:.2f} | Notes: {t_remarks}"
                     })
                     s.commit()
                 st.success(f"✅ {trx_type} logged for {t_symbol}!")
@@ -196,7 +205,11 @@ def render_page(role):
     st.markdown("---")
     st.markdown("### 🕒 Recent Entries")
     try:
-        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price FROM portfolio ORDER BY date DESC LIMIT 5", ttl=0)
-        st.dataframe(recent, use_container_width=True, hide_index=True)
-    except:
-        st.caption("No records found in the ledger.")
+        # Changed the query to fetch the newest data via DATE
+        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks FROM portfolio ORDER BY date DESC LIMIT 5", ttl=0)
+        if not recent.empty:
+            st.dataframe(recent, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No records found in the ledger.")
+    except Exception as e:
+        st.error(f"Failed to fetch recent entries: {e}")
