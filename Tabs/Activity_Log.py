@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 import plotly.express as px
+from datetime import datetime, timedelta, timezone
 
 def render_page(role):
     st.title("🗂️ Master Activity Log")
@@ -14,8 +15,8 @@ def render_page(role):
     # 1. FETCH AND PROCESS DATA
     # ==========================================
     try:
-        # Fetch the entire audit log, newest first
-        log_df = conn.query("SELECT * FROM audit_log ORDER BY timestamp DESC")
+        # IMPROVEMENT 1: Added ttl=0 for live data and LIMIT 2000 to prevent future memory crashes
+        log_df = conn.query("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 2000", ttl=0)
         log_df.columns = [c.lower() for c in log_df.columns]
     except Exception as e:
         st.error(f"⚠️ Failed to load Activity Log: {e}")
@@ -28,12 +29,11 @@ def render_page(role):
     # --- Timezone Conversion (UTC to Nepal Time UTC+5:45) ---
     log_df['timestamp'] = pd.to_datetime(log_df['timestamp'])
     
-    # Check if timezone naive, assume UTC from Neon, then add Nepal offset
+    # IMPROVEMENT 2: Safely assign UTC and convert to Nepal Time without crashing
     if log_df['timestamp'].dt.tz is None:
-        log_df['nepal_time'] = log_df['timestamp'] + pd.Timedelta(hours=5, minutes=45)
-    else:
-        # If it somehow has a timezone, convert it safely
-        log_df['nepal_time'] = log_df['timestamp'].dt.tz_convert('Asia/Kathmandu')
+        log_df['timestamp'] = log_df['timestamp'].dt.tz_localize('UTC')
+        
+    log_df['nepal_time'] = log_df['timestamp'].dt.tz_convert('Asia/Kathmandu')
 
     # Format it to look like "2026-03-17 02:30 PM"
     log_df['display_time'] = log_df['nepal_time'].dt.strftime('%Y-%m-%d %I:%M %p')
@@ -84,10 +84,13 @@ def render_page(role):
     
     c1.metric("Total Events Displayed", len(filtered_df))
     
-    # Calculate events today (in Nepal Time)
-    today_nepal = (pd.Timestamp.utcnow() + pd.Timedelta(hours=5, minutes=45)).date()
+    # Calculate events today (in precise Nepal Time)
+    np_tz = timezone(timedelta(hours=5, minutes=45))
+    today_nepal = datetime.now(np_tz).date()
     events_today = len(filtered_df[filtered_df['date_only'] == today_nepal])
-    c2.metric("Events Today", events_today)
+    
+    # Added a nice visual delta indicator for today's activity
+    c2.metric("Events Today", events_today, delta="Active Today" if events_today > 0 else None, delta_color="normal")
 
     with c3:
         # Pro Feature: CSV Downloader
@@ -108,18 +111,19 @@ def render_page(role):
 
     with tab_table:
         display_cols = filtered_df[['display_time', 'action', 'symbol', 'details']].copy()
-        display_cols.rename(columns={
-            'display_time': 'Timestamp (NST)',
-            'action': 'Event Action',
-            'symbol': 'Symbol',
-            'details': 'Transaction Details'
-        }, inplace=True)
-
+        
+        # IMPROVEMENT 3: Advanced Streamlit Column Configuration for a polished look
         st.dataframe(
             display_cols,
             use_container_width=True,
             hide_index=True,
-            height=600
+            height=600,
+            column_config={
+                "display_time": st.column_config.TextColumn("🕒 Timestamp (NST)", width="medium"),
+                "action": st.column_config.TextColumn("⚡ Event Action", width="small"),
+                "symbol": st.column_config.TextColumn("🏷️ Symbol", width="small"),
+                "details": st.column_config.TextColumn("📝 Transaction Details", width="large")
+            }
         )
 
     with tab_chart:
@@ -128,15 +132,26 @@ def render_page(role):
             # Group by date and category to make a stacked bar chart
             chart_df = filtered_df.groupby(['date_only', 'category']).size().reset_index(name='count')
             
+            # IMPROVEMENT 4: Enhanced Plotly Aesthetics
             fig = px.bar(
                 chart_df, 
                 x='date_only', 
                 y='count', 
                 color='category',
-                title="Events per Day",
-                labels={'date_only': 'Date', 'count': 'Number of Events'}
+                title="Events per Day by Category",
+                labels={'date_only': 'Date', 'count': 'Number of Events', 'category': 'Event Type'},
+                color_discrete_sequence=px.colors.qualitative.Pastel
             )
-            fig.update_layout(xaxis_tickangle=-45)
+            
+            # Make the chart look cleaner by removing the background grid
+            fig.update_layout(
+                xaxis_tickangle=-45,
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                hovermode="x unified"
+            )
+            fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+            
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Not enough data to generate a chart.")
