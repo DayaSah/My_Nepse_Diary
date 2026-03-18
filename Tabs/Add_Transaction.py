@@ -14,20 +14,27 @@ def get_current_stock_info(conn, symbol):
         df.columns = [c.lower() for c in df.columns]
         df['date'] = pd.to_datetime(df['date']).dt.date
         
-        buys = df[df['transaction_type'].str.upper() == 'BUY']
-        sells = df[df['transaction_type'].str.upper() == 'SELL']
+        buys = df[df['transaction_type'].str.upper() == 'BUY'].copy()
+        sells = df[df['transaction_type'].str.upper() == 'SELL'].copy()
         
-        # Calculate WACC and Qty
         total_buy_qty = buys['qty'].sum()
-        total_buy_cost = (buys['qty'] * buys['price']).sum()
+        
+        # --- THE NEW WACC LOGIC ---
+        # If the 'net_amount' column exists, use it! Otherwise, fallback to basic qty * price
+        if 'net_amount' in buys.columns:
+            # Fill any old empty rows with the base cost to prevent errors
+            buys['net_amount'] = buys['net_amount'].fillna(buys['qty'] * buys['price'])
+            total_buy_cost = buys['net_amount'].sum()
+        else:
+            total_buy_cost = (buys['qty'] * buys['price']).sum()
+            
         wacc = total_buy_cost / total_buy_qty if total_buy_qty > 0 else 0.0
         net_qty = total_buy_qty - sells['qty'].sum()
         
-        # Get First Purchase Date
         first_buy_date = buys['date'].min() if not buys.empty else date.today()
         
         return net_qty, wacc, first_buy_date
-    except:
+    except Exception as e:
         return 0, 0.0, date.today()
 
 def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05):
@@ -196,7 +203,8 @@ def render_page(role):
                         "q": t_qty, 
                         "p": t_price, 
                         "t": trx_type,
-                        "r": t_remarks  # Pass the new remarks field
+                        "r": t_remarks,  # Pass the new remarks field
+                        "n": res['total']
                     })
                     
                     # 2. Audit Logging
