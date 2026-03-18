@@ -78,7 +78,7 @@ def run_sync(headless=False):
                         "symbol": sym,
                         "ltp": float(item.get("close", 0)),
                         "change": float(item.get("point_change", 0)),
-                        "lastupdated": item.get("date", str(date.today()))
+                        "last_updated": item.get("date", str(date.today()))
                     })
         except Exception as e:
             print(f"Failed to fetch {sym}: {e}")
@@ -92,16 +92,16 @@ def run_sync(headless=False):
                     symbol VARCHAR(20) PRIMARY KEY,
                     ltp NUMERIC(10, 2),
                     change NUMERIC(10, 2),
-                    lastupdated VARCHAR(50)
+                    last_updated VARCHAR(50)
                 )
             """))
             
             for item in updated_data:
                 sql = text("""
-                    INSERT INTO cache (symbol, ltp, change, lastupdated) 
-                    VALUES (:symbol, :ltp, :change, :lastupdated)
+                    INSERT INTO cache (symbol, ltp, change, last_updated) 
+                    VALUES (:symbol, :ltp, :change, :last_updated)
                     ON CONFLICT (symbol) DO UPDATE 
-                    SET ltp = EXCLUDED.ltp, change = EXCLUDED.change, lastupdated = EXCLUDED.lastupdated
+                    SET ltp = EXCLUDED.ltp, change = EXCLUDED.change, last_updated = EXCLUDED.last_updated
                 """)
                 conn.execute(sql, item)
     
