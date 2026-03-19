@@ -162,6 +162,49 @@ def render_page(role):
             # Moved OUTSIDE the form so it triggers the dynamic default below instantly
             t_type = st.radio("Transaction Type", ["Deposit", "Withdrawal", "Buy", "Sell", "Charges", "Collateral Load"], horizontal=True)
             
+            # --- 🧮 SMART RECEIVABLE CALCULATOR (Only for Sell) ---
+            if t_type == "Sell":
+                with st.expander("🧮 Estimate Net Receivable (Helper)", expanded=True):
+                    st.caption("Calculate exact receivable amount and charges before logging.")
+                    cc1, cc2, cc3 = st.columns(3)
+                    calc_qty = cc1.number_input("Quantity", min_value=1, step=1, value=10, key="c_qty")
+                    calc_price = cc2.number_input("Execution Price", min_value=1.0, step=0.1, value=100.0, key="c_price")
+                    calc_wacc = cc3.number_input("WACC", min_value=1.0, step=0.1, value=100.0, key="c_wacc")
+                    
+                    cc4, cc5, cc6 = st.columns(3)
+                    calc_cgt_str = cc4.selectbox("CGT Rate", ["5% (> 1yr)", "7.5% (< 1yr)"], key="c_cgt")
+                    calc_dp = cc5.checkbox("Include DP (Rs 25)", value=True, key="c_dp")
+                    calc_override = cc6.number_input("Override Broker Comm", value=0.0, step=1.0, key="c_ovr")
+                    
+                    # Math Logic from Reference Code
+                    c_base = calc_qty * calc_price
+                    if calc_override > 0:
+                        c_broker = calc_override
+                    else:
+                        if c_base <= 50000: c_rate = 0.0036 
+                        elif c_base <= 500000: c_rate = 0.0033 
+                        elif c_base <= 2000000: c_rate = 0.0031 
+                        elif c_base <= 10000000: c_rate = 0.0027 
+                        else: c_rate = 0.0024
+                        c_broker = max(10, c_base * c_rate)
+                        
+                    c_sebon = c_base * 0.00015
+                    c_dp_fee = 25.0 if calc_dp else 0.0
+                    c_total_charges = c_broker + c_sebon + c_dp_fee
+                    
+                    c_net_sell = c_base - c_total_charges
+                    c_profit = c_net_sell - (calc_wacc * calc_qty)
+                    
+                    c_cgt_rate = 0.075 if "7.5%" in calc_cgt_str else 0.05
+                    c_cgt = max(0, c_profit * c_cgt_rate) if c_profit > 0 else 0
+                    
+                    c_receivable = c_net_sell - c_cgt
+                    c_all_deductions = c_total_charges + c_cgt
+                    
+                    st.success(f"**Net Receivable:** Rs {c_receivable:,.2f} ➔ *(Enter as Principal)*")
+                    st.error(f"**Total Deductions (Fees + CGT):** Rs {c_all_deductions:,.2f} ➔ *(Enter as Charges)*")
+            # ------------------------------------------------------
+
             with st.form("tms_entry_v7", clear_on_submit=True):
                 c1, c2, c3 = st.columns(3)
                 
@@ -183,8 +226,8 @@ def render_page(role):
                     t_medium = st.selectbox("Payment Medium", medium_options, index=default_index)
                 
                 with c3:
-                    raw_amount = st.number_input("Principal Amount (Rs)", min_value=0.0)
-                    t_charge = st.number_input("Charges (Bank/Gateway/DP)", min_value=0.0)
+                    raw_amount = st.number_input("Principal Amount (Rs)", min_value=0.0, format="%.2f")
+                    t_charge = st.number_input("Charges (Bank/Gateway/DP/Tax)", min_value=0.0, format="%.2f")
 
                 t_ref = st.text_input("Reference (Txn ID/Cheque)")
                 t_remark = st.text_input("Remarks")
