@@ -226,47 +226,102 @@ def render_page(role):
         if df.empty:
             st.info("Not enough data to generate graphs.")
         else:
-            st.markdown("##### 💓 The Pulse: Cumulative Net Balance")
-            fig_pulse = px.line(df, x='date', y='running_balance', markers=True, 
-                                color_discrete_sequence=['#00CC96'])
-            fig_pulse.update_layout(xaxis_title="Date", yaxis_title="Net Balance (Rs)")
-            st.plotly_chart(fig_pulse, use_container_width=True)
-
-            st.markdown("##### 📊 Cash Flow Trends")
-            # Base daily aggregation
-            daily_df = df.groupby('date').agg({'amount': 'sum', 'charge': 'sum'}).reset_index()
+            # --- DATE FILTER ---
+            st.markdown("##### 📅 Filter Timeframe")
             
-            # Calculate series indexed by date
-            dep_series = df[df['type'].str.upper() == 'DEPOSIT'].groupby('date')['amount'].sum()
-            with_series = df[df['type'].str.upper() == 'WITHDRAWAL'].groupby('date')['amount'].sum().abs()
+            filter_col1, filter_col2 = st.columns([1, 2])
+            with filter_col1:
+                date_filter = st.selectbox("Select Range", 
+                    ["Last 7 Days", "Last 15 Days", "Last 1 Month", "Last 2 Months", "Last 3 Months", "Last 6 Months", "Last 1 Year", "All Time", "Custom Range"], 
+                    index=7, label_visibility="collapsed")
             
-            # Map the values properly to avoid index mismatch
-            daily_df['Cash In (Deposits)'] = daily_df['date'].map(dep_series).fillna(0)
-            daily_df['Cash Out (Withdrawals)'] = daily_df['date'].map(with_series).fillna(0)
+            today_ts = pd.Timestamp.today().normalize()
+            start_date = None
+            end_date = today_ts
 
-            fig_trends = px.line(daily_df, x='date', y=['amount', 'Cash In (Deposits)', 'Cash Out (Withdrawals)', 'charge'],
-                                 labels={'value': 'Amount (Rs)', 'variable': 'Metric'})
-            st.plotly_chart(fig_trends, use_container_width=True)
+            with filter_col2:
+                if date_filter == "Custom Range":
+                    date_range = st.date_input("Select Dates", value=(today_ts.date() - pd.Timedelta(days=30), today_ts.date()), label_visibility="collapsed")
+                    if len(date_range) == 2:
+                        start_date = pd.to_datetime(date_range[0])
+                        end_date = pd.to_datetime(date_range[1])
+                    else:
+                        start_date = pd.to_datetime(date_range[0])
+                        end_date = start_date
+                elif date_filter == "Last 7 Days":
+                    start_date = today_ts - pd.Timedelta(days=7)
+                elif date_filter == "Last 15 Days":
+                    start_date = today_ts - pd.Timedelta(days=15)
+                elif date_filter == "Last 1 Month":
+                    start_date = today_ts - pd.DateOffset(months=1)
+                elif date_filter == "Last 2 Months":
+                    start_date = today_ts - pd.DateOffset(months=2)
+                elif date_filter == "Last 3 Months":
+                    start_date = today_ts - pd.DateOffset(months=3)
+                elif date_filter == "Last 6 Months":
+                    start_date = today_ts - pd.DateOffset(months=6)
+                elif date_filter == "Last 1 Year":
+                    start_date = today_ts - pd.DateOffset(years=1)
+            
+            # Apply Filter
+            if start_date is not None:
+                mask = (df['date'] >= start_date) & (df['date'] <= end_date + pd.Timedelta(days=1)) # +1 to include the end date fully
+                graph_df = df.loc[mask].copy()
+            else:
+                graph_df = df.copy()
 
-            st.markdown("##### 🔄 Portfolio Composition")
-            c1, c2 = st.columns([1, 3])
-            with c1:
-                pie_category = st.selectbox("Group By:", ["medium", "type", "status", "stock"])
-            with c2:
-                pie_df = df.dropna(subset=[pie_category]).copy()
-                pie_df['abs_amount'] = pie_df['amount'].abs()
-                if not pie_df.empty and pie_df['abs_amount'].sum() > 0:
-                    fig_pie = px.pie(pie_df, names=pie_category, values='abs_amount', hole=0.4)
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.info(f"No valid data available to group by {pie_category}.")
+            if graph_df.empty:
+                st.warning("No data found for the selected date range.")
+            else:
+                st.markdown("##### 💓 The Pulse: Cumulative Net Balance")
+                fig_pulse = px.line(graph_df, x='date', y='running_balance', markers=True, 
+                                    color_discrete_sequence=['#00CC96'])
+                fig_pulse.update_layout(xaxis_title="Date", yaxis_title="Net Balance (Rs)")
+                st.plotly_chart(fig_pulse, use_container_width=True)
 
-            st.markdown("##### 💸 Cost of Trading (Fines & Charges)")
-            cumulative_charges = df[['date', 'charge']].copy()
-            cumulative_charges['Cumulative Charges'] = cumulative_charges['charge'].cumsum()
-            fig_charges = px.line(cumulative_charges, x='date', y='Cumulative Charges', markers=True,
-                                  color_discrete_sequence=['#EF553B'])
-            st.plotly_chart(fig_charges, use_container_width=True)
+                st.markdown("##### 📊 Cash Flow Trends (Cumulative vs Daily)")
+                # Base daily aggregation from the FILTERED dataframe
+                daily_df = graph_df.groupby('date').agg({'amount': 'sum', 'charge': 'sum'}).reset_index()
+                
+                # Calculate series indexed by date
+                dep_series = graph_df[graph_df['type'].str.upper() == 'DEPOSIT'].groupby('date')['amount'].sum()
+                with_series = graph_df[graph_df['type'].str.upper() == 'WITHDRAWAL'].groupby('date')['amount'].sum().abs()
+                
+                # Map the values properly to avoid index mismatch
+                daily_df['Cash In (Daily)'] = daily_df['date'].map(dep_series).fillna(0)
+                daily_df['Cash Out (Daily)'] = daily_df['date'].map(with_series).fillna(0)
+                
+                # --- CUMULATIVE SUM LOGIC (Always going forward) ---
+                daily_df['Cash In (Cumulative)'] = daily_df['Cash In (Daily)'].cumsum()
+                daily_df['Cash Out (Cumulative)'] = daily_df['Cash Out (Daily)'].cumsum()
+                daily_df['Charges (Cumulative)'] = daily_df['charge'].cumsum()
+
+                # 'amount' remains daily net, the others are cumulative
+                fig_trends = px.line(daily_df, x='date', 
+                                     y=['amount', 'Cash In (Cumulative)', 'Cash Out (Cumulative)', 'Charges (Cumulative)'],
+                                     labels={'value': 'Amount (Rs)', 'variable': 'Metric'})
+                st.plotly_chart(fig_trends, use_container_width=True)
+
+                st.markdown("##### 🔄 Portfolio Composition")
+                c1, c2 = st.columns([1, 3])
+                with c1:
+                    pie_category = st.selectbox("Group By:", ["medium", "type", "status", "stock"])
+                with c2:
+                    pie_df = graph_df.dropna(subset=[pie_category]).copy()
+                    pie_df['abs_amount'] = pie_df['amount'].abs()
+                    if not pie_df.empty and pie_df['abs_amount'].sum() > 0:
+                        fig_pie = px.pie(pie_df, names=pie_category, values='abs_amount', hole=0.4)
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                    else:
+                        st.info(f"No valid data available to group by {pie_category}.")
+
+                st.markdown("##### 💸 Cost of Trading (Fines & Charges)")
+                # Applying cumsum to charges specifically for this graph as well
+                cumulative_charges = graph_df[['date', 'charge']].copy()
+                cumulative_charges['Cumulative Charges'] = cumulative_charges['charge'].cumsum()
+                fig_charges = px.line(cumulative_charges, x='date', y='Cumulative Charges', markers=True,
+                                      color_discrete_sequence=['#EF553B'])
+                st.plotly_chart(fig_charges, use_container_width=True)
 
     # ==========================================
     # TAB 5: EXPORT DATA (FIXED)
