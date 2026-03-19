@@ -90,27 +90,47 @@ def render_page(role):
             fig.update_layout(xaxis_title="Date", yaxis_title="Wallet Balance (Rs)")
             st.plotly_chart(fig, use_container_width=True)
 
-    # ==========================================
-    # TAB 2: UNIVERSAL LEDGER
+   # ==========================================
+    # TAB 2: UNIVERSAL LEDGER (With Delete Action)
     # ==========================================
     with tms_tabs[1]:
         st.subheader("📜 Universal Ledger")
         if not df.empty:
-            st.dataframe(
+            # We use st.data_editor instead of st.dataframe to allow row selection
+            event = st.dataframe(
                 display_df,
                 use_container_width=True,
                 hide_index=True,
+                on_select="rerun", # Enables selection
+                selection_mode="single_row",
                 column_config={
+                    "id": None, # Hide the ID column from user but keep it in data
                     "date": st.column_config.DateColumn("Date"),
                     "amount": st.column_config.NumberColumn("Amount", format="Rs %.2f"),
                     "charge": st.column_config.NumberColumn("Charges", format="Rs %.2f"),
                     "running_balance": st.column_config.NumberColumn("Net Balance", format="Rs %.2f"),
-                    "status": st.column_config.SelectboxColumn("Status", options=["Settled", "Pending"]),
                 },
-                column_order=("date", "type", "stock", "amount", "charge", "running_balance", "status", "medium", "reference", "remark")
+                column_order=("date", "type", "stock", "amount", "charge", "running_balance", "status", "medium", "reference")
             )
-        else:
-            st.info("Ledger is empty.")
+
+            # Check if a row is selected for deletion
+            selected_rows = event.selection.rows
+            if selected_rows:
+                # Get the actual ID from the dataframe using the selected index
+                selected_index = selected_rows[0]
+                row_to_delete = display_df.iloc[selected_index]
+                row_id = row_to_delete['id']
+
+                st.warning(f"⚠️ Confirm Delete: {row_to_delete['type']} of {row_to_delete['amount']} on {row_to_delete['date'].date()}?")
+                if st.button("🗑️ Permanently Delete Entry", type="primary"):
+                    try:
+                        with conn.session as s:
+                            s.execute(text("DELETE FROM tms_trx WHERE id = :id"), {"id": row_id})
+                            s.commit()
+                        st.success("Transaction Deleted!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting: {e}")
 
     # ==========================================
     # TAB 3: LOG TRANSACTION
