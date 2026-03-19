@@ -103,8 +103,8 @@ def render_page(role):
         else:
             st.info("Ledger is empty.")
 
-    # ==========================================
-    # TAB 3: ADD TRANSACTIONS (FIXED INDENTATION)
+   # ==========================================
+    # TAB 3: ADD TRANSACTIONS (REFINED)
     # ==========================================
     with tms_tabs[2]:
         if role == "View Only":
@@ -118,32 +118,48 @@ def render_page(role):
                     t_type = st.selectbox("Type", ["Buy", "Sell", "Deposit", "Withdrawal", "Fee", "Collateral Load"])
                     t_status = st.selectbox("Status", ["Settled", "Pending"])
                 with c2:
-                    t_stock = st.text_input("Stock Symbol").upper()
-                    selected_medium = st.selectbox("Medium", medium_options + ["➕ Add New..."])
-                    custom_medium = st.text_input("New Medium Name") if selected_medium == "➕ Add New..." else ""
-                    t_medium = custom_medium if selected_medium == "➕ Add New..." else selected_medium
+                    t_stock = st.text_input("Stock Symbol (Optional)").upper()
+                    
+                    # DYNAMIC MEDIUM SELECTION
+                    selected_medium = st.selectbox("Payment Medium", medium_options + ["➕ Add New..."])
+                    
+                    # Better handling of 'Add New'
+                    if selected_medium == "➕ Add New...":
+                        t_medium = st.text_input("Type Name (e.g. eSewa, Nabil Bank)", placeholder="Wallet/Bank name")
+                    else:
+                        t_medium = selected_medium
+
                 with c3:
-                    raw_amount = st.number_input("Amount", min_value=0.0)
-                    t_charge = st.number_input("Fee", min_value=0.0)
+                    raw_amount = st.number_input("Amount", min_value=0.0, step=1.0)
+                    t_charge = st.number_input("Transaction Fee", min_value=0.0)
 
                 r1, r2 = st.columns(2)
-                t_ref = r1.text_input("Reference Code")
+                t_ref = r1.text_input("Reference Code (Txn ID/Cheque)")
                 t_remark = r2.text_input("Remarks")
 
+                # AUTO-SIGN LOGIC
                 if t_type in ["Withdrawal", "Buy", "Fee"]:
                     final_amount = -abs(raw_amount)
                 else:
                     final_amount = abs(raw_amount)
 
                 if st.form_submit_button("💾 Save Transaction", type="primary", use_container_width=True):
-                    try:
-                        with conn.session as s:
-                            s.execute(text("""
-                                INSERT INTO tms_trx (date, stock, type, medium, amount, charge, remark, status, reference) 
-                                VALUES (:d, :s, :t, :m, :a, :c, :r, :st, :ref)
-                            """), {"d": t_date, "s": t_stock, "t": t_type, "m": t_medium, "a": final_amount, "c": t_charge, "r": t_remark, "st": t_status, "ref": t_ref})
-                            s.commit()
-                        st.success("✅ Transaction Saved!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                    # Validate that a medium name was typed if 'Add New' was selected
+                    if selected_medium == "➕ Add New..." and not t_medium:
+                        st.error("Please enter the name of the new Payment Medium.")
+                    else:
+                        try:
+                            with conn.session as s:
+                                s.execute(text("""
+                                    INSERT INTO tms_trx (date, stock, type, medium, amount, charge, remark, status, reference) 
+                                    VALUES (:d, :s, :t, :m, :a, :c, :r, :st, :ref)
+                                """), {
+                                    "d": t_date, "s": t_stock, "t": t_type, 
+                                    "m": t_medium, "a": final_amount, "c": t_charge, 
+                                    "r": t_remark, "st": t_status, "ref": t_ref
+                                })
+                                s.commit()
+                            st.success(f"✅ Transaction Saved via {t_medium}!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
