@@ -75,10 +75,15 @@ def run_sync(headless=False):
     np_tz = timezone(timedelta(hours=5, minutes=45))
     current_np_time = datetime.now(np_tz).strftime("%Y-%m-%d %H:%M")
 
+    # Add a standard browser User-Agent to prevent getting blocked by the API
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
     for sym in symbols:
         try:
             url = f"https://chukul.com/api/data/v2/market-summary/bysymbol/?symbol={sym}"
-            resp = requests.get(url, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=10)
             
             if resp.status_code == 200:
                 data = resp.json()
@@ -95,7 +100,7 @@ def run_sync(headless=False):
         except Exception as e:
             print(f"Failed to fetch {sym}: {e}")
 
-    # C. Push Updates to Cache Table
+    # C. Push Updates to Cache Table (Using High-Speed Bulk Execution)
     if updated_data:
         with engine.begin() as conn:
             # Ensure table exists
@@ -108,14 +113,14 @@ def run_sync(headless=False):
                 )
             """))
             
-            for item in updated_data:
-                sql = text("""
-                    INSERT INTO cache (symbol, ltp, change, last_updated) 
-                    VALUES (:symbol, :ltp, :change, :last_updated)
-                    ON CONFLICT (symbol) DO UPDATE 
-                    SET ltp = EXCLUDED.ltp, change = EXCLUDED.change, last_updated = EXCLUDED.last_updated
-                """)
-                conn.execute(sql, item)
+            # Use SQLAlchemy Bulk Execution (Passing the whole list at once)
+            sql = text("""
+                INSERT INTO cache (symbol, ltp, change, last_updated) 
+                VALUES (:symbol, :ltp, :change, :last_updated)
+                ON CONFLICT (symbol) DO UPDATE 
+                SET ltp = EXCLUDED.ltp, change = EXCLUDED.change, last_updated = EXCLUDED.last_updated
+            """)
+            conn.execute(sql, updated_data)
     
     # D. Take Daily Wealth Snapshot
     take_wealth_snapshot(engine)
@@ -130,25 +135,29 @@ def run_sync(headless=False):
         st.success(f"Database successfully synchronized with Chukul API for {len(updated_data)} stocks!")
 
 # ==========================================
-# 4. WEALTH SNAPSHOT CALCULATOR
+# 4. WEALTH SNAPSHOT CALCULATOR (UPGRADED)
 # ==========================================
 def take_wealth_snapshot(engine):
-    """Calculates total net worth and logs it for the charts."""
+    """Calculates True Net Worth (Stock Value + TMS Wallet Cash) and logs it."""
     try:
         with engine.connect() as conn:
             try:
                 port_df = pd.read_sql("SELECT * FROM portfolio", conn)
                 cache_df = pd.read_sql("SELECT * FROM cache", conn)
+                tms_df = pd.read_sql("SELECT amount FROM tms_trx", conn) # Fetch TMS Cash
             except Exception:
                 return # Tables don't exist yet
             
         if port_df.empty: return
 
-        # Format types
+        # 1. Calculate TMS Wallet Balance
+        tms_cash_balance = tms_df['amount'].sum() if not tms_df.empty else 0.0
+
+        # 2. Format types
         port_df['qty'] = pd.to_numeric(port_df['qty'])
         port_df['price'] = pd.to_numeric(port_df['price'])
         
-        # Calculate Active Holdings WACC (Optimized Pandas)
+        # 3. Calculate Active Holdings WACC (Optimized Pandas)
         buys = port_df[port_df['transaction_type'].str.upper() == 'BUY'].copy()
         sells = port_df[port_df['transaction_type'].str.upper() == 'SELL'].copy()
         
@@ -162,14 +171,18 @@ def take_wealth_snapshot(engine):
         holdings['net_qty'] = holdings['qty'] - holdings['sold_qty']
         active = holdings[holdings['net_qty'] > 0].copy()
         
-        # Match with LTP to find current value
+        # 4. Match with LTP to find current value
         if not cache_df.empty:
             active = pd.merge(active, cache_df[['symbol', 'ltp']], on='symbol', how='left').fillna(0)
         else:
             active['ltp'] = active['wacc']
 
-        total_invested = (active['net_qty'] * active['wacc']).sum()
-        current_value = (active['net_qty'] * active['ltp']).sum()
+        # 5. TRUE WEALTH CALCULATION
+        total_invested_in_stocks = (active['net_qty'] * active['wacc']).sum()
+        current_stock_value = (active['net_qty'] * active['ltp']).sum()
+
+        # Net Worth = Value of Stocks + Cash resting in TMS
+        true_net_worth = current_stock_value + tms_cash_balance
 
         # Save to DB (Using exact Nepal Time Date)
         np_tz = timezone(timedelta(hours=5, minutes=45))
@@ -182,7 +195,7 @@ def take_wealth_snapshot(engine):
                 ON CONFLICT (snapshot_date) DO UPDATE 
                 SET total_investment = EXCLUDED.total_investment, current_value = EXCLUDED.current_value
             """)
-            conn.execute(sql, {"date": today_date, "inv": total_invested, "val": current_value})
+            conn.execute(sql, {"date": today_date, "inv": total_invested_in_stocks, "val": true_net_worth})
             
     except Exception as e:
         print(f"Wealth Snapshot Failed: {e}")
