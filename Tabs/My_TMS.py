@@ -233,10 +233,16 @@ def render_page(role):
             st.plotly_chart(fig_pulse, use_container_width=True)
 
             st.markdown("##### 📊 Cash Flow Trends")
+            # Base daily aggregation
             daily_df = df.groupby('date').agg({'amount': 'sum', 'charge': 'sum'}).reset_index()
-            daily_df['Cash In (Deposits)'] = df[df['type'].str.upper() == 'DEPOSIT'].groupby('date')['amount'].sum()
-            daily_df['Cash Out (Withdrawals)'] = df[df['type'].str.upper() == 'WITHDRAWAL'].groupby('date')['amount'].sum().abs()
-            daily_df.fillna(0, inplace=True)
+            
+            # Calculate series indexed by date
+            dep_series = df[df['type'].str.upper() == 'DEPOSIT'].groupby('date')['amount'].sum()
+            with_series = df[df['type'].str.upper() == 'WITHDRAWAL'].groupby('date')['amount'].sum().abs()
+            
+            # Map the values properly to avoid index mismatch
+            daily_df['Cash In (Deposits)'] = daily_df['date'].map(dep_series).fillna(0)
+            daily_df['Cash Out (Withdrawals)'] = daily_df['date'].map(with_series).fillna(0)
 
             fig_trends = px.line(daily_df, x='date', y=['amount', 'Cash In (Deposits)', 'Cash Out (Withdrawals)', 'charge'],
                                  labels={'value': 'Amount (Rs)', 'variable': 'Metric'})
