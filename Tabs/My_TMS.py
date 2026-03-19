@@ -33,7 +33,14 @@ def render_page(role):
     ]
 
     # --- TAB NAVIGATION ---
-    tms_tabs = st.tabs(["📊 Financial Metrics", "📜 Universal Ledger", "✍️ Log Transaction"])
+    tms_tabs = st.tabs([
+        "📊 Financial Metrics", 
+        "📜 Universal Ledger", 
+        "✍️ Log Transaction",
+        "📈 Smart Graphs",     # NEW
+        "💾 Export Data",      # NEW
+        "⚙️ Manage Data"       # NEW
+    ])
 
     # ==========================================
     # LOGIC: SHARED CALCULATIONS
@@ -210,3 +217,141 @@ def render_page(role):
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
+
+    # ==========================================
+    # TAB 4: SMART GRAPHS
+    # ==========================================
+    with tms_tabs[3]:
+        st.subheader("📈 Smart Financial Visuals")
+        if df.empty:
+            st.info("Not enough data to generate graphs.")
+        else:
+            # 1. The Pulse: Cumulative Net Balance
+            st.markdown("##### 💓 The Pulse: Cumulative Net Balance")
+            fig_pulse = px.line(df, x='date', y='running_balance', markers=True, 
+                                color_discrete_sequence=['#00CC96'])
+            fig_pulse.update_layout(xaxis_title="Date", yaxis_title="Net Balance (Rs)")
+            st.plotly_chart(fig_pulse, use_container_width=True)
+
+            # 2. Cash In vs Cash Out vs Net vs Charges (Daily Aggregation)
+            st.markdown("##### 📊 Cash Flow Trends")
+            # Group by date to make the line chart readable
+            daily_df = df.groupby('date').agg({
+                'amount': 'sum', 
+                'charge': 'sum'
+            }).reset_index()
+            daily_df['Cash In (Deposits)'] = df[df['type'].str.upper() == 'DEPOSIT'].groupby('date')['amount'].sum()
+            daily_df['Cash Out (Withdrawals)'] = df[df['type'].str.upper() == 'WITHDRAWAL'].groupby('date')['amount'].sum().abs()
+            daily_df.fillna(0, inplace=True)
+
+            fig_trends = px.line(daily_df, x='date', y=['amount', 'Cash In (Deposits)', 'Cash Out (Withdrawals)', 'charge'],
+                                 labels={'value': 'Amount (Rs)', 'variable': 'Metric'})
+            st.plotly_chart(fig_trends, use_container_width=True)
+
+            # 3. Dynamic Pie Chart
+            st.markdown("##### 🔄 Portfolio Composition")
+            c1, c2 = st.columns([1, 3])
+            with c1:
+                pie_category = st.selectbox("Group By:", ["medium", "type", "status", "stock"])
+            with c2:
+                # Filter out empty/None values for the pie chart
+                pie_df = df.dropna(subset=[pie_category])
+                # We use absolute amount to size the pie slices
+                pie_df['abs_amount'] = pie_df['amount'].abs()
+                if not pie_df.empty and pie_df['abs_amount'].sum() > 0:
+                    fig_pie = px.pie(pie_df, names=pie_category, values='abs_amount', hole=0.4)
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.info(f"No valid amount data available to group by {pie_category}.")
+
+            # 4. Cost of Trading (Fines & Charges)
+            st.markdown("##### 💸 Cost of Trading (Fines & Charges)")
+            cumulative_charges = df[['date', 'charge']].copy()
+            cumulative_charges['Cumulative Charges'] = cumulative_charges['charge'].cumsum()
+            fig_charges = px.line(cumulative_charges, x='date', y='Cumulative Charges', markers=True,
+                                  color_discrete_sequence=['#EF553B'])
+            st.plotly_chart(fig_charges, use_container_width=True)
+
+    # ==========================================
+    # TAB 5: EXPORT DATA
+    # ==========================================
+    with tms_tabs[4]:
+        st.subheader("💾 Export Ledger Data")
+        if df.empty:
+            st.info("No data available to export.")
+        else:
+            st.markdown("Filter your data before exporting:")
+            
+            # Filters
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                start_date = st.date_input("Start Date", value=df['date'].min())
+                end_date = st.date_input("End Date", value=df['date'].max())
+            with col2:
+                types_to_export = st.multiselect("Filter by Type", df['type'].unique(), default=df['type'].unique())
+            with col3:
+                mediums_to_export = st.multiselect("Filter by Medium", existing_mediums, default=existing_mediums)
+
+            # Apply Filters
+            mask = (
+                (df['date'].dt.date >= start_date) & 
+                (df['date'].dt.date <= end_date) &
+                (df['type'].isin(types_to_export))
+            )
+            # Apply medium filter only if mediums exist
+            if existing_mediums:
+                mask = mask & (df['medium'].isin(mediums_to_export) | df['medium'].isna())
+                
+            filtered_export_df = df.loc[mask].drop(columns=['id', 'running_balance'], errors='ignore')
+
+            st.dataframe(filtered_export_df, use_container_width=True, hide_index=True)
+
+            # Convert to CSV
+            csv = filtered_export_df.to_csv(index=False).encode('utf-8')
+            
+            st.download_button(
+                label="📥 Download Data as CSV",
+                data=csv,
+                file_name=f"tms_export_{date.today()}.csv",
+                mime="text/csv",
+                type="primary"
+            )
+
+    # ==========================================
+    # TAB 6: MANAGE DATA (ADMIN)
+    # ==========================================
+    with tms_tabs[5]:
+        if role == "View Only":
+            st.warning("🔒 Admin access required to manage database.")
+        else:
+            st.subheader("⚙️ Database Management")
+            st.caption("Advanced tools for ledger maintenance.")
+            
+            with st.expander("📝 Bulk Edit Records (Experimental)"):
+                st.info("Edit cells directly below and save to update your database. (Requires Streamlit 1.23+)")
+                # Show editable dataframe
+                editable_df = df.drop(columns=['running_balance'], errors='ignore')
+                edited_df = st.data_editor(editable_df, use_container_width=True, num_rows="dynamic", hide_index=True)
+                
+                # Note: Fully syncing an editable dataframe to SQL requires complex diff-checking. 
+                # For now, it's best to use this feature visually, or implement a full drop-and-replace (carefully).
+                st.caption("Note: Inline saving directly to SQL requires advanced diffing logic. Use the Delete tab for safe removals.")
+
+            st.divider()
+            
+            st.subheader("⚠️ Danger Zone")
+            with st.expander("Wipe Entire Ledger"):
+                st.error("This action cannot be undone. It will delete ALL transaction history.")
+                delete_confirm = st.text_input("Type 'DELETE ALL' to confirm:")
+                if st.button("🚨 Wipe Database", type="primary", use_container_width=True):
+                    if delete_confirm == "DELETE ALL":
+                        try:
+                            with conn.session as s:
+                                s.execute(text("TRUNCATE TABLE tms_trx RESTART IDENTITY"))
+                                s.commit()
+                            st.success("Database completely wiped. Starting fresh.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    else:
+                        st.warning("Confirmation text did not match.")
