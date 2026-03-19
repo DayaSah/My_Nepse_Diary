@@ -226,20 +226,14 @@ def render_page(role):
         if df.empty:
             st.info("Not enough data to generate graphs.")
         else:
-            # 1. The Pulse: Cumulative Net Balance
             st.markdown("##### 💓 The Pulse: Cumulative Net Balance")
             fig_pulse = px.line(df, x='date', y='running_balance', markers=True, 
                                 color_discrete_sequence=['#00CC96'])
             fig_pulse.update_layout(xaxis_title="Date", yaxis_title="Net Balance (Rs)")
             st.plotly_chart(fig_pulse, use_container_width=True)
 
-            # 2. Cash In vs Cash Out vs Net vs Charges (Daily Aggregation)
             st.markdown("##### 📊 Cash Flow Trends")
-            # Group by date to make the line chart readable
-            daily_df = df.groupby('date').agg({
-                'amount': 'sum', 
-                'charge': 'sum'
-            }).reset_index()
+            daily_df = df.groupby('date').agg({'amount': 'sum', 'charge': 'sum'}).reset_index()
             daily_df['Cash In (Deposits)'] = df[df['type'].str.upper() == 'DEPOSIT'].groupby('date')['amount'].sum()
             daily_df['Cash Out (Withdrawals)'] = df[df['type'].str.upper() == 'WITHDRAWAL'].groupby('date')['amount'].sum().abs()
             daily_df.fillna(0, inplace=True)
@@ -248,23 +242,19 @@ def render_page(role):
                                  labels={'value': 'Amount (Rs)', 'variable': 'Metric'})
             st.plotly_chart(fig_trends, use_container_width=True)
 
-            # 3. Dynamic Pie Chart
             st.markdown("##### 🔄 Portfolio Composition")
             c1, c2 = st.columns([1, 3])
             with c1:
                 pie_category = st.selectbox("Group By:", ["medium", "type", "status", "stock"])
             with c2:
-                # Filter out empty/None values for the pie chart
-                pie_df = df.dropna(subset=[pie_category])
-                # We use absolute amount to size the pie slices
+                pie_df = df.dropna(subset=[pie_category]).copy()
                 pie_df['abs_amount'] = pie_df['amount'].abs()
                 if not pie_df.empty and pie_df['abs_amount'].sum() > 0:
                     fig_pie = px.pie(pie_df, names=pie_category, values='abs_amount', hole=0.4)
                     st.plotly_chart(fig_pie, use_container_width=True)
                 else:
-                    st.info(f"No valid amount data available to group by {pie_category}.")
+                    st.info(f"No valid data available to group by {pie_category}.")
 
-            # 4. Cost of Trading (Fines & Charges)
             st.markdown("##### 💸 Cost of Trading (Fines & Charges)")
             cumulative_charges = df[['date', 'charge']].copy()
             cumulative_charges['Cumulative Charges'] = cumulative_charges['charge'].cumsum()
@@ -273,7 +263,7 @@ def render_page(role):
             st.plotly_chart(fig_charges, use_container_width=True)
 
     # ==========================================
-    # TAB 5: EXPORT DATA
+    # TAB 5: EXPORT DATA (FIXED)
     # ==========================================
     with tms_tabs[4]:
         st.subheader("💾 Export Ledger Data")
@@ -282,7 +272,6 @@ def render_page(role):
         else:
             st.markdown("Filter your data before exporting:")
             
-            # Filters
             col1, col2, col3 = st.columns(3)
             with col1:
                 start_date = st.date_input("Start Date", value=df['date'].min())
@@ -290,25 +279,20 @@ def render_page(role):
             with col2:
                 types_to_export = st.multiselect("Filter by Type", df['type'].unique(), default=df['type'].unique())
             with col3:
-                mediums_to_export = st.multiselect("Filter by Medium", existing_mediums, default=existing_mediums)
+                # FIX: Using medium_options instead of existing_mediums
+                mediums_to_export = st.multiselect("Filter by Medium", medium_options, default=medium_options)
 
-            # Apply Filters
             mask = (
                 (df['date'].dt.date >= start_date) & 
                 (df['date'].dt.date <= end_date) &
-                (df['type'].isin(types_to_export))
+                (df['type'].isin(types_to_export)) &
+                (df['medium'].isin(mediums_to_export) | df['medium'].isna())
             )
-            # Apply medium filter only if mediums exist
-            if existing_mediums:
-                mask = mask & (df['medium'].isin(mediums_to_export) | df['medium'].isna())
                 
             filtered_export_df = df.loc[mask].drop(columns=['id', 'running_balance'], errors='ignore')
-
             st.dataframe(filtered_export_df, use_container_width=True, hide_index=True)
 
-            # Convert to CSV
             csv = filtered_export_df.to_csv(index=False).encode('utf-8')
-            
             st.download_button(
                 label="📥 Download Data as CSV",
                 data=csv,
@@ -318,40 +302,56 @@ def render_page(role):
             )
 
     # ==========================================
-    # TAB 6: MANAGE DATA (ADMIN)
+    # TAB 6: MANAGE DATA (SAFE DELETE OVERHAUL)
     # ==========================================
     with tms_tabs[5]:
         if role == "View Only":
             st.warning("🔒 Admin access required to manage database.")
         else:
             st.subheader("⚙️ Database Management")
-            st.caption("Advanced tools for ledger maintenance.")
             
-            with st.expander("📝 Bulk Edit Records (Experimental)"):
-                st.info("Edit cells directly below and save to update your database. (Requires Streamlit 1.23+)")
-                # Show editable dataframe
-                editable_df = df.drop(columns=['running_balance'], errors='ignore')
-                edited_df = st.data_editor(editable_df, use_container_width=True, num_rows="dynamic", hide_index=True)
+            if df.empty:
+                st.info("Database is empty.")
+            else:
+                st.caption("Raw Database View (Includes ID numbers)")
+                # Show raw dataframe WITH IDs so the admin knows what to delete
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
                 
-                # Note: Fully syncing an editable dataframe to SQL requires complex diff-checking. 
-                # For now, it's best to use this feature visually, or implement a full drop-and-replace (carefully).
-                st.caption("Note: Inline saving directly to SQL requires advanced diffing logic. Use the Delete tab for safe removals.")
-
-            st.divider()
-            
-            st.subheader("⚠️ Danger Zone")
-            with st.expander("Wipe Entire Ledger"):
-                st.error("This action cannot be undone. It will delete ALL transaction history.")
-                delete_confirm = st.text_input("Type 'DELETE ALL' to confirm:")
-                if st.button("🚨 Wipe Database", type="primary", use_container_width=True):
-                    if delete_confirm == "DELETE ALL":
+                st.divider()
+                st.markdown("#### 🗑️ Delete Specific Record")
+                st.info("Identify the 'id' from the table above and enter it below to permanently delete that record.")
+                
+                del_col1, del_col2 = st.columns([1, 2])
+                with del_col1:
+                    delete_id = st.number_input("Enter Record ID", min_value=1, step=1, value=1)
+                with del_col2:
+                    st.write("") # Spacing
+                    st.write("") # Spacing
+                    if st.button("Permanently Delete Record", type="primary"):
                         try:
                             with conn.session as s:
-                                s.execute(text("TRUNCATE TABLE tms_trx RESTART IDENTITY"))
+                                s.execute(text("DELETE FROM tms_trx WHERE id = :id"), {"id": delete_id})
                                 s.commit()
-                            st.success("Database completely wiped. Starting fresh.")
+                            st.success(f"✅ Record #{delete_id} deleted successfully!")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
-                    else:
+
+                st.divider()
+                st.markdown("#### 🚨 Danger Zone")
+                with st.expander("Wipe Entire Ledger"):
+                    st.error("This action cannot be undone. It will delete ALL transaction history.")
+                    delete_confirm = st.text_input("Type 'DELETE ALL' to confirm:")
+                    if st.button("Wipe Database", type="primary", use_container_width=True):
+                        if delete_confirm == "DELETE ALL":
+                            try:
+                                with conn.session as s:
+                                    s.execute(text("TRUNCATE TABLE tms_trx RESTART IDENTITY"))
+                                    s.commit()
+                                st.success("Database completely wiped. Starting fresh.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            st.warning("Confirmation text did not match.")
                         st.warning("Confirmation text did not match.")
