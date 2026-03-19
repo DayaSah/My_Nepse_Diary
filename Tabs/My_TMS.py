@@ -18,13 +18,19 @@ def render_page(role):
         st.error(f"⚠️ Connection Error: {e}")
         df = pd.DataFrame()
 
-    # --- DYNAMIC MEDIUM LOGIC ---
-    existing_mediums = []
-    if not df.empty and 'medium' in df.columns:
-        existing_mediums = df['medium'].dropna().unique().tolist()
-    
-    defaults = ["Bank Transfer", "ConnectIPS", "Collateral", "Cheque"]
-    medium_options = sorted(list(set(existing_mediums + defaults)))
+    # --- HARDCODED MEDIUM OPTIONS ---
+    medium_options = [
+        "ConnectIPS", 
+        "Collateral", 
+        "NABIL Bank", 
+        "GLOBAL IME Bank", 
+        "SIDDHARTHA Bank", 
+        "NIMB Bank", 
+        "Nic Asia Bank", 
+        "Khalti", 
+        "Esewa", 
+        "Other Specified In Remark"
+    ]
 
     # --- TAB NAVIGATION ---
     tms_tabs = st.tabs(["📊 Financial Metrics", "📜 Universal Ledger", "✍️ Log Transaction"])
@@ -39,7 +45,7 @@ def render_page(role):
         df = df.sort_values(by="date", ascending=True)
         df['running_balance'] = df['amount'].cumsum()
         
-        # 2. Display version (Newest first). Crucial: reset_index ensures Delete function targets correct row
+        # 2. Display version (Newest first) - reset_index ensures correct selection
         display_df = df.sort_values(by="date", ascending=False).reset_index(drop=True)
 
         # 3. Total Cash In: Sum of (Principal + Charge) for Deposits
@@ -85,7 +91,7 @@ def render_page(role):
             m2.metric("Net Settlement", f"Rs {net_settlement:,.2f}", delta=f"{'Profit' if net_settlement > 0 else 'Loss'}")
             m3.metric("Buying Power", f"Rs {buying_power:,.2f}", help="Balance + 10,824 Free Collateral")
 
-            # --- RESTORED FEATURE: T+2 Pending Alert ---
+            # --- T+2 Pending Alert ---
             if 'status' in df.columns:
                 pending_amt = df[df['status'].str.upper() == 'PENDING']['amount'].sum()
                 if pending_amt != 0:
@@ -97,12 +103,11 @@ def render_page(role):
             st.plotly_chart(fig, use_container_width=True)
 
     # ==========================================
-    # TAB 2: UNIVERSAL LEDGER (With Click-to-Delete)
+    # TAB 2: UNIVERSAL LEDGER
     # ==========================================
     with tms_tabs[1]:
         st.subheader("📜 Universal Ledger")
         if not df.empty:
-            # FIX: selection_mode="single-row" prevents the Streamlit API Exception
             event = st.dataframe(
                 display_df,
                 use_container_width=True,
@@ -119,7 +124,7 @@ def render_page(role):
                 column_order=("date", "type", "stock", "amount", "charge", "running_balance", "status", "medium", "reference", "remark")
             )
 
-            # RESTORED FEATURE: DELETE LOGIC
+            # DELETE LOGIC
             if hasattr(event, 'selection') and event.selection.rows:
                 selected_index = event.selection.rows[0]
                 row_to_delete = display_df.iloc[selected_index]
@@ -146,16 +151,30 @@ def render_page(role):
             st.warning("🔒 Admin access required.")
         else:
             st.subheader("✍️ Log New Transaction")
-            with st.form("tms_entry_v6", clear_on_submit=True):
+            
+            # Moved OUTSIDE the form so it triggers the dynamic default below instantly
+            t_type = st.radio("Transaction Type", ["Deposit", "Withdrawal", "Buy", "Sell", "Charges", "Collateral Load"], horizontal=True)
+            
+            with st.form("tms_entry_v7", clear_on_submit=True):
                 c1, c2, c3 = st.columns(3)
+                
                 with c1:
                     t_date = st.date_input("Date", value=date.today())
-                    t_type = st.selectbox("Type", ["Deposit", "Withdrawal", "Buy", "Sell", "Charges", "Collateral Load"])
                     t_status = st.selectbox("Status", ["Settled", "Pending"])
+                
                 with c2:
                     t_stock = st.text_input("Symbol (Optional)").upper()
-                    selected_medium = st.selectbox("Payment Medium", medium_options + ["➕ Add New..."])
-                    t_medium = st.text_input("New Medium Name") if selected_medium == "➕ Add New..." else selected_medium
+                    
+                    # --- DYNAMIC DEFAULT LOGIC ---
+                    if t_type == "Withdrawal":
+                        default_index = medium_options.index("NABIL Bank")
+                    elif t_type in ["Buy", "Sell", "Collateral Load"]:
+                        default_index = medium_options.index("Collateral")
+                    else:
+                        default_index = medium_options.index("ConnectIPS")
+                        
+                    t_medium = st.selectbox("Payment Medium", medium_options, index=default_index)
+                
                 with c3:
                     raw_amount = st.number_input("Principal Amount (Rs)", min_value=0.0)
                     t_charge = st.number_input("Charges (Bank/Gateway/DP)", min_value=0.0)
