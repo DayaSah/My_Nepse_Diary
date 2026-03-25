@@ -30,25 +30,39 @@ def render_page(role):
     if port_df.empty:
         st.info("Portfolio is empty."); return
 
-    # --- Calculation Engine (Basic) ---
+    # --- Calculation Engine (Fixed WACC) ---
+    # Ensure net_amount is numeric
+    port_df['net_amount'] = pd.to_numeric(port_df['net_amount'], errors='coerce').fillna(0)
+    port_df['qty'] = pd.to_numeric(port_df['qty'], errors='coerce').fillna(0)
+
     buys = port_df[port_df['transaction_type'].str.upper() == 'BUY']
     sells = port_df[port_df['transaction_type'].str.upper() == 'SELL']
 
+    # CRITICAL FIX: Use net_amount (which includes fees) for WACC
     buy_grouped = buys.groupby('symbol').apply(
-        lambda x: pd.Series({'qty': x['qty'].sum(), 'cost': (x['qty'] * x['price']).sum()})
+        lambda x: pd.Series({
+            'total_buy_qty': x['qty'].sum(), 
+            'total_buy_cost': x['net_amount'].sum() # Corrected: Uses net_amount instead of price * qty
+        })
     ).reset_index()
-    buy_grouped['wacc'] = buy_grouped['cost'] / buy_grouped['qty']
+    
+    # Calculate True WACC
+    buy_grouped['wacc'] = buy_grouped['total_buy_cost'] / buy_grouped['total_buy_qty']
 
+    # Calculate remaining shares
     sell_qty = sells.groupby('symbol')['qty'].sum().reset_index().rename(columns={'qty': 's_qty'})
     active = pd.merge(buy_grouped, sell_qty, on='symbol', how='left').fillna(0)
-    active['net_qty'] = active['qty'] - active['s_qty']
+    active['net_qty'] = active['total_buy_qty'] - active['s_qty']
     active = active[active['net_qty'] > 0].copy()
 
+    # Match with LTP from Cache
     if not cache_df.empty:
         cache_df.columns = [c.lower() for c in cache_df.columns]
         active = pd.merge(active, cache_df[['symbol', 'ltp']], on='symbol', how='left').fillna(0)
-    else: active['ltp'] = active['wacc']
+    else: 
+        active['ltp'] = active['wacc']
 
+    # Final Metrics
     active['invested'] = active['net_qty'] * active['wacc']
     active['current_val'] = active['net_qty'] * active['ltp']
     active['pl_amt'] = active['current_val'] - active['invested']
