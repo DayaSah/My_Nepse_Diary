@@ -8,3 +8,4 @@ google-generativeai==0.8.4
 openai==1.65.0
 PyGithub==2.5.0
 streamlit-option-menu
+numpy
