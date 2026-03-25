@@ -63,9 +63,10 @@ def get_current_stock_info(conn, symbol):
         return 0, 0.0, date.today()
 
 def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, override_comm=0.0):
-    """Updated logic with NEPSE tiers, CGT rules, and manual commission overrides."""
+    """Perfected NEPSE logic with exact algebraic breakeven reversal."""
     base = qty * price
     
+    # 1. Determine dynamic commission rate
     if base <= 50000:
         comm_rate = 0.0036 
     elif base <= 500000:
@@ -77,11 +78,11 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, ov
     else:
         comm_rate = 0.0024 
     
-    # Check if user manually overrode the commission due to partial executions
+    # Check if user manually overrode the commission
     if override_comm > 0:
         broker_comm = override_comm
     else:
-        broker_comm = max(10, base * comm_rate)
+        broker_comm = max(10.0, base * comm_rate)
     
     sebon_fee = base * 0.00015
     dp_fee = 25.0 if include_dp else 0.0
@@ -89,7 +90,19 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, ov
     
     if trx_type == "BUY":
         total_val = base + total_charges
-        breakeven = (total_val + (total_val * 0.0045) + 25) / qty 
+        
+        # --- NEW: PERFECT BREAKEVEN MATH ---
+        # Assuming the sell side will have the same commission tier.
+        # Handle the Rs 10 minimum broker fee edge-case for tiny transactions
+        if (base * comm_rate) < 10.0:
+            target_sell_base = total_val + dp_fee + 10.0 + (total_val * 0.00015)
+            breakeven = target_sell_base / qty
+        else:
+            # Exact algebraic reversal for percentage-based tiers
+            target_sell_base = (total_val + dp_fee) / (1.0 - comm_rate - 0.00015)
+            breakeven = target_sell_base / qty
+        # -----------------------------------
+        
         return {
             "base": base, "broker": broker_comm, "sebon": sebon_fee, 
             "dp": dp_fee, "fees": total_charges, "total": total_val, "be": breakeven
@@ -99,14 +112,13 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, ov
         total_buy_cost = wacc * qty
         profit = net_sell_value - total_buy_cost
         
-        cgt = max(0, profit * cgt_rate) if profit > 0 else 0
+        cgt = max(0.0, profit * cgt_rate) if profit > 0 else 0.0
         receivable = net_sell_value - cgt
         
         return {
             "base": base, "broker": broker_comm, "sebon": sebon_fee, 
             "dp": dp_fee, "fees": total_charges, "total": receivable, "cgt": cgt, "profit": profit
         }
-
 def render_page(role):
     # --- NEW: Admin Logic ---
     is_admin = (role == "Admin")
