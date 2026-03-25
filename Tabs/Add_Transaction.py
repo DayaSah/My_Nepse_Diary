@@ -93,10 +93,11 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, ov
         
         # --- NEW: PERFECT BREAKEVEN MATH ---
         # Assuming the sell side will have the same commission tier.
-        # Handle the Rs 10 minimum broker fee edge-case for tiny transactions
         if (base * comm_rate) < 10.0:
-            target_sell_base = total_val + dp_fee + 10.0 + (total_val * 0.00015)
+            # Exact algebraic reversal for a fixed Rs 10 commission + Rs 25 DP
+            target_sell_base = (total_val + dp_fee + 10.0) / (1.0 - 0.00015)
             breakeven = target_sell_base / qty
+        
         else:
             # Exact algebraic reversal for percentage-based tiers
             target_sell_base = (total_val + dp_fee) / (1.0 - comm_rate - 0.00015)
