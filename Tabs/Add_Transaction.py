@@ -104,8 +104,15 @@ def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, ov
         }
 
 def render_page(role):
+    # --- NEW: Admin Logic ---
+    is_admin = (role == "Admin")
+    
     st.title("📝 Trade & Settlement Engine")
     st.caption("Advanced NEPSE calculator with automated CGT and holding period analysis.")
+    
+    if not is_admin:
+        st.warning("🕵️ Read-Only Mode: You can calculate trades but cannot save them to the ledger.")
+    # ------------------------
     
     conn = st.connection("neon", type="sql")
     col_form, col_est = st.columns([1.3, 1])
@@ -153,15 +160,27 @@ def render_page(role):
             override_comm = c_comm.number_input("Override Broker Comm (Rs)", value=0.0, step=1.0, help="If NEPSE split your order and charged multiple Rs 10 minimums, enter the total TMS commission here.")
             
             st.write("")
+            
             btn_calc = st.button("🧮 Calculate Estimation", use_container_width=True)
             
             log_btn_label = "🚀 Buy / Average Stock" if trx_type == "BUY" else "🔻 Log Sell Transaction"
-            btn_save = st.button(log_btn_label, type="primary", use_container_width=True)
+                       
+            btn_save = st.button(log_btn_label, type="primary", use_container_width=True, disabled=not is_admin)
+
 
     # ==========================================
     # CALCULATION ENGINE
     # ==========================================
     res = calculate_fees(t_qty, t_price, trx_type, include_dp, user_wacc, cgt_val, override_comm)
+
+    # --- NEW: Determine Invested vs Received ---
+    if trx_type == "BUY":
+        total_invested_db = res['total']
+        total_received_db = 0.0
+    else:
+        total_invested_db = 0.0
+        total_received_db = res['total']
+    # -----------------------------------------
 
     with col_est:
         st.subheader("🧾 Settlement Bill")
@@ -174,6 +193,7 @@ def render_page(role):
                 st.write(f"⚖️ **Net Profit/Loss:** Rs {res['profit']:,.2f}")
 
             st.divider()
+            
             st.write(f"🔸 **Base Amount:** Rs {res['base']:,.2f}")
             st.write(f"🔹 **Broker Commission:** Rs {res['broker']:,.2f}")
             st.write(f"🔹 **SEBON Fee:** Rs {res['sebon']:,.2f}")
@@ -189,16 +209,16 @@ def render_page(role):
     # ==========================================
     # SAVE TO DATABASE
     # ==========================================
-    if btn_save:
+    if btn_save and is_admin: # <-- Added admin check here too just in case
         if not t_symbol:
             st.error("Please enter a valid Stock Symbol.")
         else:
             try:
                 with conn.session as s:
-                    # FIXED: Added net_amount to the string so the database accepts the :n parameter!
+                    # --- NEW: Added total_invested and total_received columns ---
                     s.execute(text("""
-                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount) 
-                        VALUES (:d, :s, :q, :p, :t, :r, :n)
+                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received) 
+                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr)
                     """), {
                         "d": t_date, 
                         "s": t_symbol, 
@@ -206,7 +226,9 @@ def render_page(role):
                         "p": t_price, 
                         "t": trx_type,
                         "r": t_remarks,
-                        "n": res['total']  
+                        "n": res['total'],
+                        "ti": total_invested_db,  # <-- NEW
+                        "tr": total_received_db   # <-- NEW
                     })
                     
                     s.execute(text("""
@@ -227,7 +249,7 @@ def render_page(role):
     st.markdown("---")
     st.markdown("### 🕒 Recent Entries")
     try:
-        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
+        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks, total_invested, total_received FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
         if not recent.empty:
             st.dataframe(recent, use_container_width=True, hide_index=True)
         else:
