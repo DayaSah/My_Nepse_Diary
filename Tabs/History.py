@@ -195,6 +195,32 @@ def render_page(role):
             c2.metric("Total Unrealized P/L", f"Rs {total_unreal_pl:,.2f}", f"{unreal_roi:.2f}%")
             c3.metric("Active Lots", f"{len(unrealized_df)}")
             
+            st.divider()
+            
+            # --- NEW: Aggregated Summary View ---
+            st.markdown("#### 📊 Aggregated Positions (By Symbol)")
+            
+            agg_df = unrealized_df.groupby('Symbol').agg(
+                Total_Qty=('Qty', 'sum'),
+                Total_Invested=('Total Invested', 'sum'),
+                Current_Value=('Current Value', 'sum'),
+                Net_PL=('Net P/L', 'sum'),
+                LTP=('LTP', 'first') # LTP is same for all lots of a symbol
+            ).reset_index()
+            
+            agg_df['WACC'] = agg_df['Total_Invested'] / agg_df['Total_Qty']
+            agg_df['ROI %'] = (agg_df['Net_PL'] / agg_df['Total_Invested']) * 100
+            
+            styled_agg = agg_df.style.map(color_pl, subset=['Net_PL', 'ROI %']).format({
+                'Total_Invested': '{:,.2f}', 'Current_Value': '{:,.2f}',
+                'Net_PL': '{:,.2f}', 'ROI %': '{:.2f}%', 'WACC': '{:.2f}', 'LTP': '{:.2f}'
+            })
+            st.dataframe(styled_agg, use_container_width=True, hide_index=True)
+            
+            st.divider()
+            
+            # --- Detailed Tax-Lot View (Your Original Code) ---
+            st.markdown("#### 🔬 Detailed Tax-Lot Breakdown")
             styled_unrealized = unrealized_df.style.map(color_pl, subset=['Net P/L', '%']).format({
                 'Buy Rate': '{:,.2f}', 'LTP': '{:,.2f}',
                 'Total Invested': '{:,.2f}', 'Current Value': '{:,.2f}',
