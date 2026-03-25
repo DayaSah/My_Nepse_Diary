@@ -4,18 +4,16 @@ from sqlalchemy import text
 from datetime import date
 
 def get_current_stock_info(conn, symbol):
-    """Calculates chronological quantity, Rolling WACC, and Holding Period."""
+    """Calculates quantity, Rolling WACC, and EXACT Holding Period using FIFO."""
     if not symbol: return 0, 0.0, date.today()
     
     try:
-        # 1. Fetch all trades for this stock, sorted from OLDEST to NEWEST
         df = conn.query(f"SELECT * FROM portfolio WHERE symbol = '{symbol.upper()}' ORDER BY date ASC, transaction_type DESC", ttl=0)
         if df.empty: return 0, 0.0, date.today()
         
         df.columns = [c.lower() for c in df.columns]
         df['date'] = pd.to_datetime(df['date']).dt.date
         
-        # Ensure net_amount exists to avoid crashes on old data
         if 'net_amount' not in df.columns:
             df['net_amount'] = df['qty'] * df['price']
         else:
@@ -23,35 +21,41 @@ def get_current_stock_info(conn, symbol):
             
         current_qty = 0
         total_invested = 0.0
-        first_buy_date = date.today()
         
-        # 2. Chronological Ledger Loop
+        # NEW: FIFO Queue to track the age of specific batches
+        date_inventory = [] 
+        
         for index, row in df.iterrows():
             if row['transaction_type'].upper() == 'BUY':
-                # If we are buying from a 0 balance, reset the Holding Date!
-                if current_qty <= 0:
-                    first_buy_date = row['date']
-                    current_qty = 0
-                    total_invested = 0.0
-                
                 current_qty += row['qty']
                 total_invested += row['net_amount']
+                # Add this specific batch and its date to the inventory
+                date_inventory.append({'qty': row['qty'], 'date': row['date']})
                 
             elif row['transaction_type'].upper() == 'SELL':
-                # Find out what the WACC was AT THE TIME OF SALE
                 current_wacc = total_invested / current_qty if current_qty > 0 else 0.0
-                
-                # Deduct the shares and the invested capital
                 current_qty -= row['qty']
                 total_invested -= (row['qty'] * current_wacc)
                 
-                # THE MAGIC: If we sold everything, wipe the slate clean!
                 if current_qty <= 0:
                     current_qty = 0
                     total_invested = 0.0
+                    date_inventory = [] # Wipe inventory if fully sold
+                else:
+                    # NEW: Remove the oldest shares from the inventory first (FIFO)
+                    rem = row['qty']
+                    while rem > 0 and date_inventory:
+                        if date_inventory[0]['qty'] <= rem:
+                            rem -= date_inventory[0]['qty']
+                            date_inventory.pop(0) # Oldest batch fully sold out
+                        else:
+                            date_inventory[0]['qty'] -= rem
+                            rem = 0
                     
-        # 3. Final Current WACC calculation
         final_wacc = total_invested / current_qty if current_qty > 0 else 0.0
+        
+        # The oldest date is simply the date of the first batch remaining in inventory
+        first_buy_date = date_inventory[0]['date'] if date_inventory else date.today()
         
         return current_qty, final_wacc, first_buy_date
         
