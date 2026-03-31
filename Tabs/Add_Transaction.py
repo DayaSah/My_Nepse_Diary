@@ -224,41 +224,58 @@ def render_page(role):
             st.info(f"**Total Fees & Taxes:** Rs {total_cost_of_trade:,.2f}")
 
     # ==========================================
-    # SAVE TO DATABASE
+    # SAVE TO DATABASE (Portfolio + TMS Sync)
     # ==========================================
-    if btn_save and is_admin: # <-- Added admin check here too just in case
+    if btn_save and is_admin:
         if not t_symbol:
             st.error("Please enter a valid Stock Symbol.")
         else:
             try:
+                # Calculate the Wallet Impact for TMS
+                # Buy = Negative (Money leaves wallet), Sell = Positive (Money enters wallet)
+                tms_amount = -res['total'] if trx_type == "BUY" else res['total']
+                
                 with conn.session as s:
-                    # --- NEW: Added total_invested and total_received columns ---
+                    # 1. RECORD IN PORTFOLIO TABLE
                     s.execute(text("""
                         INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received) 
                         VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr)
                     """), {
-                        "d": t_date, 
-                        "s": t_symbol, 
-                        "q": t_qty, 
-                        "p": t_price, 
-                        "t": trx_type,
-                        "r": t_remarks,
-                        "n": res['total'],
-                        "ti": total_invested_db,  # <-- NEW
-                        "tr": total_received_db   # <-- NEW
+                        "d": t_date, "s": t_symbol, "q": t_qty, "p": t_price, 
+                        "t": trx_type, "r": t_remarks, "n": res['total'],
+                        "ti": total_invested_db, "tr": total_received_db
                     })
                     
+                    # 2. AUTOMATICALLY RECORD IN TMS_TRX TABLE
+                    s.execute(text("""
+                        INSERT INTO tms_trx (date, stock, type, medium, amount, charge, remark, status, reference) 
+                        VALUES (:d, :s, :t, :m, :a, :c, :r, :st, :ref)
+                    """), {
+                        "d": t_date,
+                        "s": t_symbol,
+                        "t": trx_type.capitalize(), # Stores as 'Buy' or 'Sell'
+                        "m": "Collateral",
+                        "a": tms_amount,            # Total Payable/Receivable
+                        "c": 0,                     # Charges empty as requested
+                        "r": f"Auto-Logged: {t_remarks}",
+                        "st": "Settled",
+                        "ref": ""                   # Reference empty as requested
+                    })
+                    
+                    # 3. AUDIT LOG
                     s.execute(text("""
                         INSERT INTO audit_log (action, symbol, details) 
                         VALUES (:act, :sym, :det)
                     """), {
                         "act": f"TRADE_{trx_type}", 
                         "sym": t_symbol, 
-                        "det": f"{t_qty} units @ Rs {t_price} | Net: Rs {res['total']:.2f} | Notes: {t_remarks}"
+                        "det": f"{t_qty} units @ Rs {t_price} | TMS Sync: Rs {tms_amount:,.2f}"
                     })
+                    
                     s.commit()
-                st.success(f"✅ {trx_type} logged for {t_symbol}!")
+                st.success(f"✅ {trx_type} logged and TMS Balance updated!")
                 st.balloons()
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
