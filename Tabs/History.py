@@ -166,34 +166,34 @@ def render_page(role):
         if realized_df.empty:
             st.info("No closed trades yet. Sell a stock to see Realized P/L.")
         else:
-        # 1. Top Level Metrics
+            # 1. Top Level Metrics
             total_net_pl = realized_df['Net P/L'].sum()
             win_rate = (len(realized_df[realized_df['Net P/L'] > 0]) / len(realized_df)) * 100
-        
+            
             c1, c2, c3 = st.columns(3)
             c1.metric("Total Realized Profit", f"Rs {total_net_pl:,.2f}")
             c2.metric("Tax Lots Closed", f"{len(realized_df)}")
             c3.metric("Trade Win Rate", f"{win_rate:.1f}%")
-        
+            
             st.divider()
 
-        # --- 2. Aggregated Summary View (By Symbol) ---
+            # --- 2. Aggregated Summary View (By Symbol) ---
             st.markdown("#### 📊 Aggregated Realized Summary (By Symbol)")
-        
-        # Grouping realized trades to see total performance per stock
+            
+            # Grouping realized trades to see total performance per stock
             agg_realized = realized_df.groupby('Symbol').agg(
                 Total_Qty=('Qty', 'sum'),
                 Total_Invested=('Total Invested', 'sum'),
                 Total_Received=('Total Received', 'sum'),
                 Net_PL=('Net P/L', 'sum')
             ).reset_index()
-        
-        # Calculate Weighted Averages for the summary
+            
+            # Calculate Weighted Averages for the summary
             agg_realized['Avg Buy'] = agg_realized['Total_Invested'] / agg_realized['Total_Qty']
             agg_realized['Avg Sell'] = agg_realized['Total_Received'] / agg_realized['Total_Qty']
             agg_realized['Total ROI %'] = (agg_realized['Net_PL'] / agg_realized['Total_Invested']) * 100
-        
-        # Reorder columns for better readability
+            
+            # Reorder columns for better readability
             agg_realized = agg_realized[['Symbol', 'Total_Qty', 'Avg Buy', 'Avg Sell', 'Total_Invested', 'Total_Received', 'Net_PL', 'Total_ROI %']]
 
             styled_agg_realized = agg_realized.style.map(color_pl, subset=['Net_PL', 'Total_ROI %']).format({
