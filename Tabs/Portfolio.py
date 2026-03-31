@@ -132,36 +132,53 @@ def render_page(role):
     try:
         port_df = conn.query("SELECT * FROM portfolio", ttl=0)
         cache_df = conn.query("SELECT * FROM cache", ttl=0)
+        
+        # FIX: Lowercase BOTH dataframes immediately to prevent key mismatch errors downstream
         port_df.columns = [c.lower() for c in port_df.columns]
-    except:
-        st.error("Database Connection Error"); return
+        if not cache_df.empty:
+            cache_df.columns = [c.lower() for c in cache_df.columns]
+            
+    except Exception as e:
+        st.error(f"Database Connection Error: {e}")
+        return
 
     if port_df.empty:
-        st.info("Portfolio ledger is empty."); return
+        st.info("Portfolio ledger is empty.")
+        return
 
     # 1. FIFO Calculation
     active = calculate_fifo_wacc(port_df)
     
     if active.empty:
-        st.info("No active holdings found."); return
+        st.info("No active holdings found.")
+        return
 
-    # 2. FIX: Safely Integrate Live Prices (LTP)
+    # 2. Safely Integrate Live Prices (LTP)
     if not cache_df.empty and 'symbol' in cache_df.columns and 'ltp' in cache_df.columns:
-        cache_df.columns = [c.lower() for c in cache_df.columns]
         active = pd.merge(active, cache_df[['symbol', 'ltp']], on='symbol', how='left')
         active['ltp'] = pd.to_numeric(active['ltp'], errors='coerce')
+        # Fallback to WACC if LTP is missing for a specific stock
         active['ltp'] = active['ltp'].fillna(active['wacc'])
     else:
+        # Fallback if cache is totally empty or missing columns
         active['ltp'] = active['wacc']
 
-    # 3. FIX: Exact Financial Metrics
+    # 3. Exact Financial Metrics
     active[['breakeven', 'current_val', 'pl_amt', 'pl_pct']] = active.apply(calculate_exact_metrics, axis=1)
-    active['weight'] = (active['current_val'] / active['current_val'].sum()) * 100
+    
+    # Safely calculate weights and SORT the dataframe so biggest holdings are at the top
+    total_portfolio_value = active['current_val'].sum()
+    if total_portfolio_value > 0:
+        active['weight'] = (active['current_val'] / total_portfolio_value) * 100
+    else:
+        active['weight'] = 0.0
+        
+    active = active.sort_values(by='weight', ascending=False).reset_index(drop=True)
 
     # 4. Summary Dashboard
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Invested", f"Rs {active['total_cost'].sum():,.0f}")
-    c2.metric("Net Receivable (at LTP)", f"Rs {active['current_val'].sum():,.0f}", help="Total cash you would receive in bank after ALL fees and taxes.")
+    c2.metric("Net Receivable (at LTP)", f"Rs {total_portfolio_value:,.0f}", help="Total cash you would receive in bank after ALL fees and taxes.")
     
     total_pl = active['pl_amt'].sum()
     total_pct = (total_pl / active['total_cost'].sum() * 100) if active['total_cost'].sum() > 0 else 0
