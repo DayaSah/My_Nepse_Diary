@@ -162,64 +162,64 @@ def render_page(role):
         return f'background-color: {color}'
 
     # --- TAB 1: REALISED HISTORY ---
-with tabs[0]:
-    if realized_df.empty:
-        st.info("No closed trades yet. Sell a stock to see Realized P/L.")
-    else:
+    with tabs[0]:
+        if realized_df.empty:
+            st.info("No closed trades yet. Sell a stock to see Realized P/L.")
+        else:
         # 1. Top Level Metrics
-        total_net_pl = realized_df['Net P/L'].sum()
-        win_rate = (len(realized_df[realized_df['Net P/L'] > 0]) / len(realized_df)) * 100
+            total_net_pl = realized_df['Net P/L'].sum()
+            win_rate = (len(realized_df[realized_df['Net P/L'] > 0]) / len(realized_df)) * 100
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Realized Profit", f"Rs {total_net_pl:,.2f}")
-        c2.metric("Tax Lots Closed", f"{len(realized_df)}")
-        c3.metric("Trade Win Rate", f"{win_rate:.1f}%")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Realized Profit", f"Rs {total_net_pl:,.2f}")
+            c2.metric("Tax Lots Closed", f"{len(realized_df)}")
+            c3.metric("Trade Win Rate", f"{win_rate:.1f}%")
         
-        st.divider()
+            st.divider()
 
         # --- 2. Aggregated Summary View (By Symbol) ---
-        st.markdown("#### 📊 Aggregated Realized Summary (By Symbol)")
+            st.markdown("#### 📊 Aggregated Realized Summary (By Symbol)")
         
         # Grouping realized trades to see total performance per stock
-        agg_realized = realized_df.groupby('Symbol').agg(
-            Total_Qty=('Qty', 'sum'),
-            Total_Invested=('Total Invested', 'sum'),
-            Total_Received=('Total Received', 'sum'),
-            Net_PL=('Net P/L', 'sum')
-        ).reset_index()
+            agg_realized = realized_df.groupby('Symbol').agg(
+                Total_Qty=('Qty', 'sum'),
+                Total_Invested=('Total Invested', 'sum'),
+                Total_Received=('Total Received', 'sum'),
+                Net_PL=('Net P/L', 'sum')
+            ).reset_index()
         
         # Calculate Weighted Averages for the summary
-        agg_realized['Avg Buy'] = agg_realized['Total_Invested'] / agg_realized['Total_Qty']
-        agg_realized['Avg Sell'] = agg_realized['Total_Received'] / agg_realized['Total_Qty']
-        agg_realized['Total ROI %'] = (agg_realized['Net_PL'] / agg_realized['Total_Invested']) * 100
+            agg_realized['Avg Buy'] = agg_realized['Total_Invested'] / agg_realized['Total_Qty']
+            agg_realized['Avg Sell'] = agg_realized['Total_Received'] / agg_realized['Total_Qty']
+            agg_realized['Total ROI %'] = (agg_realized['Net_PL'] / agg_realized['Total_Invested']) * 100
         
         # Reorder columns for better readability
-        agg_realized = agg_realized[['Symbol', 'Total_Qty', 'Avg Buy', 'Avg Sell', 'Total_Invested', 'Total_Received', 'Net_PL', 'Total_ROI %']]
+            agg_realized = agg_realized[['Symbol', 'Total_Qty', 'Avg Buy', 'Avg Sell', 'Total_Invested', 'Total_Received', 'Net_PL', 'Total_ROI %']]
 
-        styled_agg_realized = agg_realized.style.map(color_pl, subset=['Net_PL', 'Total_ROI %']).format({
-            'Total_Qty': '{:,.0f}', 
-            'Avg Buy': '{:,.2f}', 
-            'Avg Sell': '{:,.2f}',
-            'Total_Invested': '{:,.2f}', 
-            'Total_Received': '{:,.2f}',
-            'Net_PL': '{:,.2f}', 
-            'Total_ROI %': '{:.2f}%'
-        })
-        st.dataframe(styled_agg_realized, use_container_width=True, hide_index=True)
+            styled_agg_realized = agg_realized.style.map(color_pl, subset=['Net_PL', 'Total_ROI %']).format({
+                'Total_Qty': '{:,.0f}', 
+                'Avg Buy': '{:,.2f}', 
+                'Avg Sell': '{:,.2f}',
+                'Total_Invested': '{:,.2f}', 
+                'Total_Received': '{:,.2f}',
+                'Net_PL': '{:,.2f}', 
+                'Total_ROI %': '{:.2f}%'
+            })
+            st.dataframe(styled_agg_realized, use_container_width=True, hide_index=True)
 
-        st.divider()
+            st.divider()
 
-        # --- 3. Detailed Tax-Lot View ---
-        st.markdown("#### 🔬 Detailed Closed Tax-Lots")
-        styled_realized = realized_df.style.map(color_pl, subset=['Net P/L', '%']).format({
-            'Buy Rate': '{:,.2f}', 
-            'Sell Rate': '{:,.2f}',
-            'Total Invested': '{:,.2f}', 
-            'Total Received': '{:,.2f}',
-            'Net P/L': '{:,.2f}', 
-            '%': '{:.2f}%'
-        })
-        st.dataframe(styled_realized, use_container_width=True, hide_index=True)
+            # --- 3. Detailed Tax-Lot View ---
+            st.markdown("#### 🔬 Detailed Closed Tax-Lots")
+            styled_realized = realized_df.style.map(color_pl, subset=['Net P/L', '%']).format({
+                'Buy Rate': '{:,.2f}', 
+                'Sell Rate': '{:,.2f}',
+                'Total Invested': '{:,.2f}', 
+                'Total Received': '{:,.2f}',
+                'Net P/L': '{:,.2f}', 
+                '%': '{:.2f}%'
+            })
+            st.dataframe(styled_realized, use_container_width=True, hide_index=True)
 
     # --- TAB 2: UNREALISED HISTORY ---
     with tabs[1]:
