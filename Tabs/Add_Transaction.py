@@ -232,18 +232,24 @@ def render_page(role):
         else:
             try:
                 # Calculate the Wallet Impact for TMS
-                # Buy = Negative (Money leaves wallet), Sell = Positive (Money enters wallet)
                 tms_amount = -res['total'] if trx_type == "BUY" else res['total']
+                
+                # --- NEW: Calculate TMS Commission & CGT Database Values ---
+                tms_comm_db = res['broker'] + res['sebon']
+                # If SELL, get CGT (even if it is 0.0). If BUY, send None (Empty/NULL).
+                cgt_val_db = res.get('cgt', 0.0) if trx_type == "SELL" else None
+                # -----------------------------------------------------------
                 
                 with conn.session as s:
                     # 1. RECORD IN PORTFOLIO TABLE
                     s.execute(text("""
-                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received) 
-                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr)
+                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received, tms_commission, cgt) 
+                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr, :tms_c, :cgt_v)
                     """), {
                         "d": t_date, "s": t_symbol, "q": t_qty, "p": t_price, 
                         "t": trx_type, "r": t_remarks, "n": res['total'],
-                        "ti": total_invested_db, "tr": total_received_db
+                        "ti": total_invested_db, "tr": total_received_db,
+                        "tms_c": tms_comm_db, "cgt_v": cgt_val_db    # <-- NEW
                     })
                     
                     # 2. AUTOMATICALLY RECORD IN TMS_TRX TABLE
@@ -253,13 +259,13 @@ def render_page(role):
                     """), {
                         "d": t_date,
                         "s": t_symbol,
-                        "t": trx_type.capitalize(), # Stores as 'Buy' or 'Sell'
+                        "t": trx_type.capitalize(),
                         "m": "Collateral",
-                        "a": tms_amount,            # Total Payable/Receivable
-                        "c": 0,                     # Charges empty as requested
+                        "a": tms_amount,            
+                        "c": 0,                     
                         "r": f"Auto-Logged: {t_remarks}",
                         "st": "Settled",
-                        "ref": ""                   # Reference empty as requested
+                        "ref": ""                   
                     })
                     
                     # 3. AUDIT LOG
@@ -269,7 +275,7 @@ def render_page(role):
                     """), {
                         "act": f"TRADE_{trx_type}", 
                         "sym": t_symbol, 
-                        "det": f"{t_qty} units @ Rs {t_price} | TMS Sync: Rs {tms_amount:,.2f}"
+                        "det": f"{t_qty} units @ Rs {t_price} | TMS Sync: Rs {tms_amount:,.2f} | Comm: Rs {tms_comm_db:.2f}"
                     })
                     
                     s.commit()
@@ -283,7 +289,7 @@ def render_page(role):
     st.markdown("---")
     st.markdown("### 🕒 Recent Entries")
     try:
-        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks, total_invested, total_received FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
+        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks, total_invested, total_received, cgt, tms_commission FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
         if not recent.empty:
             st.dataframe(recent, use_container_width=True, hide_index=True)
         else:
