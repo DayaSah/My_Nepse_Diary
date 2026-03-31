@@ -9,7 +9,6 @@ def calculate_fifo_wacc(df):
     Handles partial sells correctly and accounts for fees via net_amount.
     """
     active_holdings = []
-    # Ensure date is datetime for sorting
     df['date'] = pd.to_datetime(df['date'])
     
     for symbol in df['symbol'].unique():
@@ -28,12 +27,13 @@ def calculate_fifo_wacc(df):
                 while rem > 0 and inventory:
                     if inventory[0]['qty'] <= rem:
                         rem -= inventory[0]['qty']
-                        inventory.pop(0) # Oldest lot fully sold
+                        inventory.pop(0) 
                     else:
-                        # Deduct from oldest lot partially
                         unit_cost = inventory[0]['total_cost'] / inventory[0]['qty']
                         inventory[0]['qty'] -= rem
                         inventory[0]['total_cost'] -= (unit_cost * rem)
+                        # FIX: Prevent floating point trailing decimals
+                        inventory[0]['total_cost'] = round(inventory[0]['total_cost'], 4)
                         rem = 0
         
         if inventory:
@@ -47,6 +47,52 @@ def calculate_fifo_wacc(df):
             })
             
     return pd.DataFrame(active_holdings)
+
+# --- NEW: EXACT NEPSE SIMULATOR ---
+def calculate_exact_metrics(row):
+    qty = row['net_qty']
+    total_cost = row['total_cost']
+    ltp = row['ltp']
+    
+    # 1. EXACT BREAKEVEN REVERSAL
+    if total_cost <= 50000: comm_rate = 0.0036 
+    elif total_cost <= 500000: comm_rate = 0.0033 
+    elif total_cost <= 2000000: comm_rate = 0.0031 
+    elif total_cost <= 10000000: comm_rate = 0.0027 
+    else: comm_rate = 0.0024
+    
+    if (total_cost * comm_rate) < 10.0:
+        target_sell = (total_cost + 25.0 + 10.0) / (1.0 - 0.00015)
+    else:
+        target_sell = (total_cost + 25.0) / (1.0 - comm_rate - 0.00015)
+        
+    breakeven = target_sell / qty if qty > 0 else 0.0
+    
+    # 2. EXACT NET P/L AT CURRENT LTP (Includes all fees and CGT)
+    base_sell = qty * ltp
+    if base_sell <= 50000: s_comm = 0.0036 
+    elif base_sell <= 500000: s_comm = 0.0033 
+    elif base_sell <= 2000000: s_comm = 0.0031 
+    elif base_sell <= 10000000: s_comm = 0.0027 
+    else: s_comm = 0.0024
+    
+    broker_fee = max(10.0, base_sell * s_comm)
+    sebon_fee = base_sell * 0.00015
+    dp_fee = 25.0
+    total_sell_fees = broker_fee + sebon_fee + dp_fee
+    
+    net_sell_before_tax = base_sell - total_sell_fees
+    profit_for_tax = net_sell_before_tax - total_cost
+    
+    # Apply conservative 7.5% CGT (Short term assumption for safety)
+    cgt = max(0.0, profit_for_tax * 0.075) if profit_for_tax > 0 else 0.0
+    
+    net_receivable = net_sell_before_tax - cgt
+    true_pl_amt = net_receivable - total_cost
+    true_pl_pct = (true_pl_amt / total_cost) * 100 if total_cost > 0 else 0.0
+    
+    return pd.Series([breakeven, net_receivable, true_pl_amt, true_pl_pct])
+# ----------------------------------
 
 def style_pl_selective(val):
     """
@@ -99,29 +145,27 @@ def render_page(role):
     if active.empty:
         st.info("No active holdings found."); return
 
-    # 2. Integrate Live Prices (LTP)
-    if not cache_df.empty:
+    # 2. FIX: Safely Integrate Live Prices (LTP)
+    if not cache_df.empty and 'symbol' in cache_df.columns and 'ltp' in cache_df.columns:
         cache_df.columns = [c.lower() for c in cache_df.columns]
         active = pd.merge(active, cache_df[['symbol', 'ltp']], on='symbol', how='left')
-        active['ltp'] = pd.to_numeric(active['ltp']).fillna(active['wacc'])
+        active['ltp'] = pd.to_numeric(active['ltp'], errors='coerce')
+        active['ltp'] = active['ltp'].fillna(active['wacc'])
     else:
         active['ltp'] = active['wacc']
 
-    # 3. Financial Metrics
-    active['current_val'] = active['net_qty'] * active['ltp']
-    active['pl_amt'] = active['current_val'] - active['total_cost']
-    active['pl_pct'] = (active['pl_amt'] / active['total_cost']) * 100
+    # 3. FIX: Exact Financial Metrics
+    active[['breakeven', 'current_val', 'pl_amt', 'pl_pct']] = active.apply(calculate_exact_metrics, axis=1)
     active['weight'] = (active['current_val'] / active['current_val'].sum()) * 100
-    active['breakeven'] = (active['wacc'] * 1.005) + (25 / active['net_qty'])
 
     # 4. Summary Dashboard
     c1, c2, c3 = st.columns(3)
-    c1.metric("Invested", f"Rs {active['total_cost'].sum():,.0f}")
-    c2.metric("Market Value", f"Rs {active['current_val'].sum():,.0f}")
+    c1.metric("Total Invested", f"Rs {active['total_cost'].sum():,.0f}")
+    c2.metric("Net Receivable (at LTP)", f"Rs {active['current_val'].sum():,.0f}", help="Total cash you would receive in bank after ALL fees and taxes.")
     
     total_pl = active['pl_amt'].sum()
     total_pct = (total_pl / active['total_cost'].sum() * 100) if active['total_cost'].sum() > 0 else 0
-    c3.metric("Unrealized P/L", f"Rs {total_pl:,.0f}", f"{total_pct:.2f}%")
+    c3.metric("True Unrealized P/L", f"Rs {total_pl:,.0f}", f"{total_pct:.2f}%")
 
     st.divider()
     
@@ -132,10 +176,8 @@ def render_page(role):
     # 5. Styled Data Table
     st.subheader("📋 Active Holdings")
     
-    # Selecting columns for clean display
     display_df = active[['symbol', 'net_qty', 'wacc', 'breakeven', 'ltp', 'pl_amt', 'pl_pct', 'weight']]
     
-    # Format and Style
     styled_df = display_df.style.map(style_pl_selective, subset=['pl_pct']).format({
         'wacc': '{:.2f}',
         'breakeven': '{:.2f}',
