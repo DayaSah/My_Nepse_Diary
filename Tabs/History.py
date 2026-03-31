@@ -163,7 +163,7 @@ def render_page(role):
 
     
 
-    # --- TAB 1: REALISED HISTORY ---
+# --- TAB 1: REALISED HISTORY ---
     with tabs[0]:
         if realized_df.empty:
             st.info("No closed trades yet. Sell a stock to see Realized P/L.")
@@ -184,7 +184,7 @@ def render_page(role):
             # 2. AGGREGATED SUMMARY VIEW (By Symbol)
             st.markdown("#### 📊 Aggregated Realized Summary (By Symbol)")
             
-            # Group by Symbol and sum the core values
+            # Group by Symbol - using exact names from your realized_df
             agg_realized = realized_df.groupby('Symbol').agg({
                 'Qty': 'sum',
                 'Total Invested': 'sum',
@@ -192,27 +192,21 @@ def render_page(role):
                 'Net P/L': 'sum'
             }).reset_index()
             
-            # Calculate Averages and ROI %
-            agg_realized['Avg Buy'] = agg_realized['Total_Invested'] / agg_realized['Qty']
-            agg_realized['Avg Sell'] = agg_realized['Total_Received'] / agg_realized['Qty']
-            agg_realized['ROI_Pct'] = (agg_realized['Net P/L'] / agg_realized['Total_Invested']) * 100
+            # CALCULATIONS - Standardized to use spaces (matches the aggregation keys above)
+            agg_realized['Avg Buy'] = agg_realized['Total Invested'] / agg_realized['Qty']
+            agg_realized['Avg Sell'] = agg_realized['Total Received'] / agg_realized['Qty']
+            agg_realized['Total ROI %'] = (agg_realized['Net P/L'] / agg_realized['Total Invested']) * 100
             
-            # Rename columns for display to avoid KeyErrors in future list-reordering
-            display_agg = agg_realized.rename(columns={
-                'Qty': 'Total Qty',
-                'Total_Invested': 'Invested',
-                'Total_Received': 'Received',
-                'Net_PL': 'Net P/L',
-                'ROI_Pct': 'Total ROI %'
-            })
+            # Reorder for display (Safely choosing existing columns)
+            display_agg = agg_realized[['Symbol', 'Qty', 'Avg Buy', 'Avg Sell', 'Total Invested', 'Total Received', 'Net P/L', 'Total ROI %']]
 
-            # Formatting and Styling the Aggregated Table
+            # Formatting and Styling
             styled_agg = display_agg.style.map(color_pl, subset=['Net P/L', 'Total ROI %']).format({
-                'Total Qty': '{:,.0f}',
+                'Qty': '{:,.0f}',
                 'Avg Buy': '{:,.2f}',
                 'Avg Sell': '{:,.2f}',
-                'Invested': '{:,.2f}',
-                'Received': '{:,.2f}',
+                'Total Invested': '{:,.2f}',
+                'Total Received': '{:,.2f}',
                 'Net P/L': '{:,.2f}',
                 'Total ROI %': '{:.2f}%'
             })
@@ -223,8 +217,12 @@ def render_page(role):
             # 3. DETAILED TAX-LOT VIEW
             st.markdown("#### 🔬 Detailed Closed Tax-Lots")
             
-            # Reordering the detailed view columns for logical flow
-            detailed_display = realized_df[['Symbol', 'Qty', 'Buy Date', 'Sell Date', 'Buy Rate', 'Sell Rate', 'Total Invested', 'Total Received', 'Net P/L', '%', 'Buy Remark', 'Sell Remark']]
+            # Only include columns we are 100% sure exist in realized_df
+            detailed_cols = ['Symbol', 'Qty', 'Buy Date', 'Sell Date', 'Buy Rate', 'Sell Rate', 'Total Invested', 'Total Received', 'Net P/L', '%']
+            if 'Buy Remark' in realized_df.columns: detailed_cols.append('Buy Remark')
+            if 'Sell Remark' in realized_df.columns: detailed_cols.append('Sell Remark')
+            
+            detailed_display = realized_df[detailed_cols]
             
             styled_detailed = detailed_display.style.map(color_pl, subset=['Net P/L', '%']).format({
                 'Qty': '{:,.0f}',
@@ -236,6 +234,8 @@ def render_page(role):
                 '%': '{:.2f}%'
             })
             st.dataframe(styled_detailed, use_container_width=True, hide_index=True)
+
+    
 
     # --- TAB 2: UNREALISED HISTORY ---
     with tabs[1]:
