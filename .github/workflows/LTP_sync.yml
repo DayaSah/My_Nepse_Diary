@@ -2,8 +2,15 @@ name: NEPSE Market Sync
 
 on:
   repository_dispatch:
-    # This MUST match the 'event_type' in your Python code above
+    # This matches the 'event_type' from your Render FastAPI code
     types: [trigger_nepse_sync]
+  
+  schedule:
+    # Runs every hour from 11 AM to 3 PM Nepal Time
+    # 05:15 UTC = 11:00 NPT
+    # 09:15 UTC = 15:00 NPT
+    # Days: 0-3 (Sunday, Monday, Tuesday, Wednesday)
+    - cron: '15 5-9 * * 0-3'
 
 jobs:
   scrape_and_update:
@@ -19,10 +26,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests sqlalchemy psycopg2-binary pandas
+          pip install requests sqlalchemy psycopg2-binary pandas pytz
 
       - name: Execute Scraper Script
         env:
-          # IMPORTANT: Go to GitHub Repo Settings -> Secrets and add DATABASE_URL
+          # Using your specific secret name
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: python Utility/Refresh.py
