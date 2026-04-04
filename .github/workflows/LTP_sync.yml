@@ -1,14 +1,15 @@
-name: Manual NEPSE Refresh
+name: NEPSE Market Sync
 
 on:
   repository_dispatch:
+    # This MUST match the 'event_type' in your Python code above
     types: [trigger_nepse_sync]
 
 jobs:
-  refresh_job:
+  scrape_and_update:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -17,10 +18,11 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install requests sqlalchemy psycopg2-binary pandas
+        run: |
+          pip install requests sqlalchemy psycopg2-binary pandas
 
-      - name: Run Scraper
+      - name: Execute Scraper Script
         env:
-          # You must add DATABASE_URL to GitHub Repo -> Settings -> Secrets
-          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }} 
-        run: python Tabs/Refresh.py
+          # IMPORTANT: Go to GitHub Repo Settings -> Secrets and add DATABASE_URL
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python Utility/Refresh.py
