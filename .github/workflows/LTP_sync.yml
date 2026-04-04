@@ -1,0 +1,26 @@
+name: Manual NEPSE Refresh
+
+on:
+  repository_dispatch:
+    types: [trigger_nepse_sync]
+
+jobs:
+  refresh_job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install requests sqlalchemy psycopg2-binary pandas
+
+      - name: Run Scraper
+        env:
+          # You must add DATABASE_URL to GitHub Repo -> Settings -> Secrets
+          DATABASE_URL: ${{ secrets.DATABASE_URL }} 
+        run: python Tabs/Refresh.py
