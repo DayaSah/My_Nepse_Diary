@@ -22,5 +22,5 @@ jobs:
       - name: Run Scraper
         env:
           # You must add DATABASE_URL to GitHub Repo -> Settings -> Secrets
-          DATABASE_URL: ${{ secrets.DATABASE_URL }} 
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }} 
         run: python Tabs/Refresh.py
