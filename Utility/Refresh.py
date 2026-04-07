@@ -1,13 +1,10 @@
 import os
 import requests
-import pandas as pd
 from sqlalchemy import create_engine, text
-from urllib.parse import quote
 import datetime
 import pytz
 
-# --- 1. CONFIGURATION ---
-# GitHub Actions will provide this from your Repo Secrets
+# --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -16,72 +13,72 @@ def update_ltp_cache():
     nepal_tz = pytz.timezone('Asia/Kathmandu')
     now_time = datetime.datetime.now(nepal_tz).strftime("%Y-%m-%d %H:%M:%S")
     
-    print(f"🚀 Starting NEPSE Sync at {now_time}")
+    print(f"🚀 Starting Deep Sync at {now_time}")
 
-    # --- 2. FETCH DATA VIA PROXY ---
     target_url = "https://chukul.com/api/data/v2/live-market/"
-    proxy_url = f"https://api.allorigins.win/raw?url={quote(target_url)}"
-    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://chukul.com/"
     }
 
     try:
-        print(f"📡 Fetching from Chukul via Proxy...")
-        response = requests.get(proxy_url, headers=headers, timeout=30)
-        
+        response = requests.get(target_url, headers=headers, timeout=25)
         if response.status_code != 200:
             print(f"❌ Failed to fetch data. Status: {response.status_code}")
             return
 
         data = response.json()
-        if not isinstance(data, list):
-            print("❌ Unexpected data format received.")
-            return
-
-        # Prepare data for Database
-        # We only need Symbol and LTP
+        
+        # Prepare the list for database update
         updates = []
         for item in data:
             symbol = str(item.get('symbol', '')).strip().upper()
             ltp = item.get('ltp')
+            
+            # Extract the new fields Chukul provides
+            # We map: percentage_change -> change_percent
+            # We map: volume -> volume
+            # We map: high -> day_high
+            # We map: low -> day_low
+            
             if symbol and ltp is not None:
-                updates.append((symbol, float(ltp)))
+                updates.append({
+                    "symbol": symbol,
+                    "ltp": float(ltp),
+                    "change": float(item.get('percentage_change', 0.0)),
+                    "vol": int(item.get('volume', 0)),
+                    "h": float(item.get('high', ltp)),
+                    "l": float(item.get('low', ltp))
+                })
 
-        print(f"✅ Scraped {len(updates)} symbols successfully.")
-
-        # --- 3. DATABASE UPDATE (UPSERT) ---
+        # --- DATABASE UPDATE ---
         if not DATABASE_URL:
-            print("❌ DATABASE_URL not found. Skipping DB update.")
+            print("❌ DATABASE_URL missing.")
             return
 
         engine = create_engine(DATABASE_URL)
         
         with engine.begin() as conn:
-            # Create table if it doesn't exist
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS public.cache (
-                    symbol VARCHAR(20) PRIMARY KEY,
-                    ltp NUMERIC,
-                    last_updated TIMESTAMP
-                );
-            """))
-
-            # Use PostgreSQL UPSERT logic (Insert or Update on Conflict)
-            upsert_query = text("""
-                INSERT INTO public.cache (symbol, ltp, last_updated)
-                VALUES (:symbol, :ltp, NOW())
-                ON CONFLICT (symbol) 
-                DO UPDATE SET 
-                    ltp = EXCLUDED.ltp,
-                    last_updated = NOW();
+            # We only update rows that you've already added manually.
+            # If the stock isn't in your 'cache' table, this script ignores it.
+            update_query = text("""
+                UPDATE public.cache 
+                SET ltp = :ltp, 
+                    change_percent = :change,
+                    volume = :vol,
+                    day_high = :h,
+                    day_low = :l,
+                    last_updated = NOW()
+                WHERE symbol = :symbol;
             """)
 
-            # Execute in batch for speed
-            for symbol, ltp in updates:
-                conn.execute(upsert_query, {"symbol": symbol, "ltp": ltp})
+            counter = 0
+            for row in updates:
+                result = conn.execute(update_query, row)
+                if result.rowcount > 0:
+                    counter += 1
 
-        print(f"🎉 Database Cache Updated successfully at {now_time}!")
+        print(f"✅ Sync Complete. Updated {counter} tracking stocks in DB.")
 
     except Exception as e:
         print(f"🚨 CRITICAL ERROR: {str(e)}")
