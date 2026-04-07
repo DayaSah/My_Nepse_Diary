@@ -2,7 +2,7 @@ name: NEPSE Market Sync
 
 on:
   repository_dispatch:
-    types: [trigger_nepse_sync]
+    types: [trigger-ltp-sync]
   workflow_dispatch: 
   schedule:
     # 05:00 UTC = 10:45 NPT (Close enough to 10:50)
