@@ -4,7 +4,7 @@ on:
   schedule:
     # 11:15 AM UTC equals exactly 5:00 PM Nepal Time (NST)
     # 0-4 represents Sunday to Thursday
-    - cron: '15 11 * * 0-4'
+    - cron: '15 11 * * 1-5'
   workflow_dispatch: # This allows you to manually click "Run Workflow" in GitHub to test it
 
 jobs:
