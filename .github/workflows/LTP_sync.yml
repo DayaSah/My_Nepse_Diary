@@ -9,7 +9,7 @@ on:
     # Runs every hour from 11 AM to 3 PM Nepal Time
     # 05:15 UTC = 11:00 NPT
     # 09:15 UTC = 15:00 NPT
-    # Days: 0-3 (Sunday, Monday, Tuesday, Wednesday)
+    # Days: 1-5 (Monday, Tuesday, Wednesday,Thrusday, Friday)
     - cron: '15 5-9 * * 0-3'
 
 jobs:
