@@ -3,6 +3,7 @@ import requests
 from sqlalchemy import create_engine, text
 import datetime
 import pytz
+import time
 
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -22,13 +23,13 @@ def send_telegram_alert(message):
             print(f"Failed to send Telegram: {e}")
 
 def update_ltp_cache():
+    start_time = time.time()
     nepal_tz = pytz.timezone('Asia/Kathmandu')
     now_dt = datetime.datetime.now(nepal_tz)
-    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     
-    print(f"🚀 Syncing NEPSE at {now_str}")
+    print(f"🚀 [0.0s] Starting NEPSE Sync at {now_dt.strftime('%H:%M:%S')}")
 
-    # Direct URL - No Proxy
+    # 1. FETCH API DATA (Do this first while DB might be waking up)
     target_url = "https://chukul.com/api/data/v2/live-market/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -36,56 +37,65 @@ def update_ltp_cache():
     }
 
     try:
-        # 1. FETCH DATA
-        response = requests.get(target_url, headers=headers, timeout=20)
+        api_start = time.time()
+        response = requests.get(target_url, headers=headers, timeout=25)
         if response.status_code != 200:
-            error_msg = f"Chukul API returned {response.status_code}"
-            print(f"❌ {error_msg}")
-            send_telegram_alert(error_msg)
-            return
-
-        data = response.json()
+            raise Exception(f"Chukul API returned {response.status_code}")
         
-        # 2. PREPARE DATA BATCH
-        updates = []
-        for item in data:
-            symbol = str(item.get('symbol', '')).strip().upper()
-            ltp = item.get('ltp')
-            
-            if symbol and ltp is not None:
-                updates.append({
-                    "symbol": symbol,
-                    "ltp": float(ltp),
-                    "change": float(item.get('percentage_change', 0.0)),
-                    "vol": int(item.get('volume', 0)),
-                    "h": float(item.get('high', ltp)),
-                    "l": float(item.get('low', ltp)),
-                    "ts": now_dt  # Database uses this timestamp
-                })
+        raw_data = response.json()
+        print(f"📡 [{round(time.time() - api_start, 2)}s] API Data Downloaded ({len(raw_data)} symbols found).")
 
-        # 3. FAST BATCH DATABASE UPDATE
+        # 2. DATABASE HANDSHAKE
         if not DATABASE_URL:
             print("❌ DATABASE_URL missing.")
             return
 
+        db_start = time.time()
         engine = create_engine(DATABASE_URL)
+        
         with engine.begin() as conn:
-            # Batch Update Logic: Much faster than a loop
-            update_query = text("""
-                UPDATE public.cache 
-                SET ltp = :ltp, 
-                    change_percent = :change,
-                    volume = :vol,
-                    day_high = :h,
-                    day_low = :l,
-                    last_updated = :ts
-                WHERE symbol = :symbol;
-            """)
+            print(f"🛢️  [{round(time.time() - db_start, 2)}s] DB Connected (Neon Wake-up).")
             
-            result = conn.execute(update_query, updates)
-            updated_count = result.rowcount
+            # 3. GET ACTIVE SYMBOLS FROM YOUR CACHE
+            # This is the "Filter" that prevents updating 300+ useless rows
+            result = conn.execute(text("SELECT symbol FROM public.cache"))
+            portfolio_symbols = {row[0].upper() for row in result}
+            print(f"📋 Found {len(portfolio_symbols)} symbols in your cache to update.")
 
-        print(f"✅ Sync Complete. {updated_count} stocks updated.")
+            # 4. FILTER API DATA IN MEMORY (Lightning Fast)
+            updates = []
+            for item in raw_data:
+                symbol = str(item.get('symbol', '')).strip().upper()
+                
+                if symbol in portfolio_symbols:
+                    ltp = item.get('ltp')
+                    if ltp is not None:
+                        updates.append({
+                            "symbol": symbol,
+                            "ltp": float(ltp),
+                            "change": float(item.get('percentage_change', 0.0)),
+                            "vol": int(item.get('volume', 0)),
+                            "h": float(item.get('high', ltp)),
+                            "l": float(item.get('low', ltp)),
+                            "ts": now_dt
+                        })
+
+            # 5. EXECUTE PRECISION BATCH UPDATE
+            if updates:
+                update_query = text("""
+                    UPDATE public.cache 
+                    SET ltp = :ltp, 
+                        change_percent = :change,
+                        volume = :vol,
+                        day_high = :h,
+                        day_low = :l,
+                        last_updated = :ts
+                    WHERE symbol = :symbol;
+                """)
+                conn.execute(update_query, updates)
+                print(f"✅ [{round(time.time() - start_time, 2)}s] Sync Complete. {len(updates)} stocks updated.")
+            else:
+                print("⚠️ No matching symbols found in the API data.")
 
     except Exception as e:
         error_detail = str(e)
