@@ -11,6 +11,8 @@ on:
     # 09:15 UTC = 15:00 NPT
     # Days: 1-5 (Monday, Tuesday, Wednesday,Thrusday, Friday)
     - cron: '15 5-9 * * 0-3'
+  workflow_dispatch: # This allows you to manually click "Run Workflow" in GitHub to test it
+
 
 jobs:
   scrape_and_update:
