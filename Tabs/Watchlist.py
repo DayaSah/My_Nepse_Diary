@@ -4,7 +4,6 @@ from sqlalchemy import text
 import numpy as np
 
 def render_page(role):
-    st.set_page_config(layout="wide") # Use wide mode for better data visibility
     st.title("👀 NEPSE Command Center")
     st.caption("Live Radar, Entry/Exit Observers, and Portfolio Logic.")
 
