@@ -105,6 +105,14 @@ def update_ltp_cache():
                         send_telegram_alert(f"🎯 TARGET REACHED: {symbol}\nLTP: {ltp} (Target: {target})\nNote: {notes}", is_error=False)
                     elif sl > 0 and ltp <= sl:
                         send_telegram_alert(f"🛑 STOP LOSS HIT: {symbol}\nLTP: {ltp} (SL: {sl})\nNote: {notes}", is_error=False)
+                    if hard_target and ltp >= hard_target:
+                        send_telegram_alert(f"🚨 HARD TARGET HIT: {symbol} at {ltp}!")
+                    elif hard_sl and ltp <= hard_sl:
+                        send_telegram_alert(f"💀 HARD STOP LOSS HIT: {symbol} at {ltp}!")
+
+
+
+            
             else:
                 print("⚠️ No matching symbols found.")
 
