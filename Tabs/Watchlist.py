@@ -40,7 +40,12 @@ def render_page(role):
     if not wl_df.empty and not cache_df.empty:
         # Merge Watchlist with Live Cache
         df = pd.merge(wl_df, cache_df[['symbol', 'ltp', 'change_percent', 'volume']], on='symbol', how='left')
-        df['ltp'] = df['ltp'].fillna(0)
+        
+        # FIX: Force numeric conversion and fill NULLs/NaNs with 0 to prevent comparison crashes
+        numeric_columns = ['ltp', 'target_price', 'hard_target', 'stop_loss', 'hard_sl', 'entry_1', 'entry_must']
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
         # Logic for "Conditions Fulfilled" (The Observers)
         df['target_hit'] = (df['target_price'] > 0) & (df['ltp'] >= df['target_price'])
