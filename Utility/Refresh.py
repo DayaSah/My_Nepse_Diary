@@ -23,41 +23,6 @@ def send_telegram_alert(message, is_error=True):
         except Exception as e:
             print(f"Failed to send Telegram: {e}")
 
-
-def check_watchlist_triggers(conn):
-    """Compares fresh LTP from cache against user-defined Watchlist targets/SL."""
-    print("🔍 Checking Watchlist for hits...")
-    
-    # Query to join fresh prices with your targets
-    trigger_query = text("""
-        SELECT 
-            w.symbol, 
-            c.ltp, 
-            w.target_price, 
-            w.stop_loss, 
-            w.notes
-        FROM public.watchlist w
-        JOIN public.cache c ON w.symbol = c.symbol
-    """)
-    
-    results = conn.execute(trigger_query)
-    
-    for row in results:
-        symbol, ltp, target, sl, notes = row
-        
-        # 1. Check Target Hit
-        if target and ltp >= target:
-            msg = f"🎯 TARGET HIT: {symbol}\nPrice: {ltp} (Target: {target})\nNote: {notes}"
-            send_telegram_alert(msg)
-            print(f"  -> {symbol} hit Target!")
-
-        # 2. Check Stop Loss Hit
-        elif sl and ltp <= sl:
-            msg = f"🛑 STOP LOSS HIT: {symbol}\nPrice: {ltp} (SL: {sl})\nNote: {notes}"
-            send_telegram_alert(msg)
-            print(f"  -> {symbol} hit SL!")
-
-
 def update_ltp_cache():
     start_time = time.time()
     nepal_tz = pytz.timezone('Asia/Kathmandu')
@@ -81,28 +46,21 @@ def update_ltp_cache():
         raw_data = response.json()
         print(f"📡 [{round(time.time() - api_start, 2)}s] API Data Downloaded ({len(raw_data)} symbols found).")
 
-        # 2. DATABASE HANDSHAKE
         if not DATABASE_URL:
             print("❌ DATABASE_URL missing.")
             return
 
-        db_start = time.time()
         engine = create_engine(DATABASE_URL)
         
         with engine.begin() as conn:
-            print(f"🛢️  [{round(time.time() - db_start, 2)}s] DB Connected.")
-            
-            # 3. GET SYMBOLS FROM BOTH CACHE AND WATCHLIST
-            # This ensures we have data for both portfolio tracking and alerts
+            # 2. GET ALL SYMBOLS WE CARE ABOUT
             sym_query = text("SELECT symbol FROM public.cache UNION SELECT symbol FROM public.watchlist")
             tracked_symbols = {row[0].upper() for row in conn.execute(sym_query)}
-            print(f"📋 Tracking {len(tracked_symbols)} unique symbols.")
-
-            # 4. FILTER API DATA IN MEMORY
+            
+            # 3. FILTER API DATA
             updates = []
             for item in raw_data:
                 symbol = str(item.get('symbol', '')).strip().upper()
-                
                 if symbol in tracked_symbols:
                     ltp = item.get('ltp')
                     if ltp is not None:
@@ -116,50 +74,42 @@ def update_ltp_cache():
                             "ts": now_dt
                         })
 
-            # 5. EXECUTE BATCH UPDATE
             if updates:
-                update_query = text("""
-                    UPDATE public.cache 
-                    SET ltp = :ltp, 
-                        change_percent = :change,
-                        volume = :vol,
-                        day_high = :h,
-                        day_low = :l,
-                        last_updated = :ts
-                    WHERE symbol = :symbol;
+                # 4. UPSERT DATA (Handles new watchlist items automatically)
+                upsert_query = text("""
+                    INSERT INTO public.cache (symbol, ltp, change_percent, volume, day_high, day_low, last_updated)
+                    VALUES (:symbol, :ltp, :change, :vol, :h, :l, :ts)
+                    ON CONFLICT (symbol) DO UPDATE SET
+                        ltp = EXCLUDED.ltp,
+                        change_percent = EXCLUDED.change_percent,
+                        volume = EXCLUDED.volume,
+                        day_high = EXCLUDED.day_high,
+                        day_low = EXCLUDED.day_low,
+                        last_updated = EXCLUDED.last_updated;
                 """)
-                conn.execute(update_query, updates)
-                print(f"✅ [{round(time.time() - start_time, 2)}s] Sync Complete.")
+                conn.execute(upsert_query, updates)
+                print(f"✅ Sync Complete. {len(updates)} symbols processed.")
 
-                # 6. WATCHLIST ALERT CHECK
-                # We join fresh prices in cache with watchlist targets
+                # 5. WATCHLIST ALERT LOGIC
                 alert_query = text("""
                     SELECT w.symbol, c.ltp, w.target_price, w.stop_loss, w.notes
                     FROM public.watchlist w
                     JOIN public.cache c ON w.symbol = c.symbol
-                    WHERE c.ltp >= w.target_price OR c.ltp <= w.stop_loss;
+                    WHERE (w.target_price > 0 AND c.ltp >= w.target_price) 
+                       OR (w.stop_loss > 0 AND c.ltp <= w.stop_loss);
                 """)
                 
                 hits = conn.execute(alert_query).fetchall()
-                for hit in hits:
-                    symbol, ltp, target, sl, notes = hit
-                    
-                    if ltp >= target:
-                        msg = f"🎯 TARGET REACHED: {symbol}\nLTP: {ltp} (Target: {target})\nNote: {notes}"
-                        send_telegram_alert(msg, is_error=False)
-                        print(f"📢 Notification Sent: {symbol} Target Hit")
-                    
-                    elif ltp <= sl:
-                        msg = f"🛑 STOP LOSS HIT: {symbol}\nLTP: {ltp} (SL: {sl})\nNote: {notes}"
-                        send_telegram_alert(msg, is_error=False)
-                        print(f"📢 Notification Sent: {symbol} SL Hit")
+                for symbol, ltp, target, sl, notes in hits:
+                    if target > 0 and ltp >= target:
+                        send_telegram_alert(f"🎯 TARGET REACHED: {symbol}\nLTP: {ltp} (Target: {target})\nNote: {notes}", is_error=False)
+                    elif sl > 0 and ltp <= sl:
+                        send_telegram_alert(f"🛑 STOP LOSS HIT: {symbol}\nLTP: {ltp} (SL: {sl})\nNote: {notes}", is_error=False)
             else:
-                print("⚠️ No matching symbols found in the API data.")
+                print("⚠️ No matching symbols found.")
 
     except Exception as e:
-        error_detail = str(e)
-        print(f"🚨 CRITICAL ERROR: {error_detail}")
-        send_telegram_alert(error_detail, is_error=True)
+        send_telegram_alert(str(e), is_error=True)
 
 if __name__ == "__main__":
     update_ltp_cache()
