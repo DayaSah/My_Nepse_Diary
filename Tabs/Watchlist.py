@@ -1,168 +1,165 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
+import numpy as np
 
 def render_page(role):
-    st.title("👀 Market Watchlist")
-    st.caption("Track potential trades, set price targets, and monitor stop-losses.")
+    st.set_page_config(layout="wide") # Use wide mode for better data visibility
+    st.title("👀 NEPSE Command Center")
+    st.caption("Live Radar, Entry/Exit Observers, and Portfolio Logic.")
 
     # Initialize Database Connection
     conn = st.connection("neon", type="sql")
 
     # ==========================================
-    # 0. SYSTEM LOGGING UTILITY
+    # 0. SYSTEM LOGGING & DATA UTILITIES
     # ==========================================
     def log_system_error(error_msg):
-        """Silently logs errors to the audit_log table so the app doesn't crash."""
         try:
             with conn.session as s:
-                sql = text("INSERT INTO audit_log (action, details) VALUES ('SYSTEM_ERROR', :msg)")
-                s.execute(sql, {"msg": str(error_msg)})
+                s.execute(text("INSERT INTO audit_log (action, details) VALUES ('DASHBOARD_ERROR', :msg)"), {"msg": str(error_msg)})
                 s.commit()
-        except:
-            pass # If the logger fails, just fail silently
+        except: pass
+
+    @st.cache_data(ttl=10) # Fast refresh for live data
+    def get_data():
+        try:
+            wl = conn.query("SELECT * FROM watchlist", ttl=0)
+            cache = conn.query("SELECT * FROM cache", ttl=0)
+            wl.columns = [c.lower() for c in wl.columns]
+            cache.columns = [c.lower() for c in cache.columns]
+            return wl, cache
+        except Exception as e:
+            log_system_error(e)
+            return pd.DataFrame(), pd.DataFrame()
+
+    wl_df, cache_df = get_data()
 
     # ==========================================
-    # 1. FETCH AND PROCESS DATA
+    # 1. DATA PROCESSING (The "Brain")
     # ==========================================
-    try:
-        wl_df = conn.query("SELECT * FROM watchlist ORDER BY added_date DESC", ttl=0)
-        cache_df = conn.query("SELECT * FROM cache", ttl=3600)
-        
-        # Standardize columns for Postgres
-        wl_df.columns = [c.lower() for c in wl_df.columns]
-        if not cache_df.empty:
-            cache_df.columns = [c.lower() for c in cache_df.columns]
-            
-    except Exception as e:
-        st.error("⚠️ Failed to load watchlist data. The engineering team has been notified.")
-        log_system_error(f"Watchlist Load Error: {e}")
-        wl_df = pd.DataFrame()
-        cache_df = pd.DataFrame()
+    if not wl_df.empty and not cache_df.empty:
+        # Merge Watchlist with Live Cache
+        df = pd.merge(wl_df, cache_df[['symbol', 'ltp', 'change_percent', 'volume']], on='symbol', how='left')
+        df['ltp'] = df['ltp'].fillna(0)
+
+        # Logic for "Conditions Fulfilled" (The Observers)
+        df['target_hit'] = (df['target_price'] > 0) & (df['ltp'] >= df['target_price'])
+        df['hard_target_hit'] = (df['hard_target'] > 0) & (df['ltp'] >= df['hard_target'])
+        df['sl_hit'] = (df['stop_loss'] > 0) & (df['ltp'] <= df['stop_loss'])
+        df['hard_sl_hit'] = (df['hard_sl'] > 0) & (df['ltp'] <= df['hard_sl'])
+        df['entry_1_hit'] = (df['entry_1'] > 0) & (df['ltp'] <= df['entry_1'])
+        df['must_entry_hit'] = (df['entry_must'] > 0) & (df['ltp'] <= df['entry_must'])
+    else:
+        df = pd.DataFrame()
 
     # ==========================================
-    # 2. UI TABS SETUP
+    # 2. DASHBOARD TABS
     # ==========================================
-    tabs = st.tabs(["📡 Radar (Live View)", "➕ Add to Watchlist", "🗑️ Manage"])
+    tabs = st.tabs(["📡 Radar (Live View)", "🔎 Observers (Signals)", "🛠️ Management"])
 
-    # --- TAB 1: LIVE RADAR ---
+    # --- TAB 1: RADAR (The Observation Place) ---
     with tabs[0]:
-        if wl_df.empty:
-            st.info("Your watchlist is empty. Go to the next tab to add stocks.")
+        if df.empty:
+            st.info("No data available. Add symbols in the Management tab.")
         else:
-            # Merge with Live Market Data
-            if not cache_df.empty and 'ltp' in cache_df.columns:
-                radar_df = pd.merge(wl_df, cache_df[['symbol', 'ltp', 'change']], on='symbol', how='left').fillna(0)
-            else:
-                radar_df = wl_df.copy()
-                radar_df['ltp'] = 0.0
-                radar_df['change'] = 0.0
+            st.subheader("Market Observation Deck")
+            
+            # Metrics Overview
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Tracked", len(df))
+            c2.metric("Entry Zones", df['entry_1_hit'].sum(), delta_color="normal")
+            c3.metric("Exit Zones", (df['target_hit'] | df['sl_hit']).sum(), delta_color="inverse")
 
-            # Calculate Distance to Targets
-            radar_df['to_target_pct'] = radar_df.apply(
-                lambda x: ((x['target_price'] - x['ltp']) / x['ltp'] * 100) if x['ltp'] > 0 and x['target_price'] > 0 else 0, axis=1
-            )
-            radar_df['to_stop_pct'] = radar_df.apply(
-                lambda x: ((x['ltp'] - x['stop_loss']) / x['stop_loss'] * 100) if x['ltp'] > 0 and x['stop_loss'] > 0 else 0, axis=1
-            )
-
-            # Display formatting
-            display_df = radar_df[['symbol', 'ltp', 'change', 'target_price', 'to_target_pct', 'stop_loss', 'to_stop_pct', 'notes']].copy()
-            display_df.rename(columns={
-                'symbol': 'Symbol',
-                'ltp': 'Live Price',
-                'change': 'Day Change',
-                'target_price': 'Target (Rs)',
-                'to_target_pct': 'Dist. to Target',
-                'stop_loss': 'Stop Loss (Rs)',
-                'to_stop_pct': 'Dist. to Stop',
-                'notes': 'Investment Thesis'
-            }, inplace=True)
-
+            # Main Radar Table
+            radar_display = df[['symbol', 'ltp', 'change_percent', 'entry_1', 'entry_must', 'target_price', 'hard_target', 'stop_loss', 'hard_sl', 'notes']].copy()
+            
             st.dataframe(
-                display_df,
+                radar_display,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "Live Price": st.column_config.NumberColumn(format="Rs %.2f"),
-                    "Target (Rs)": st.column_config.NumberColumn(format="%.2f"),
-                    "Stop Loss (Rs)": st.column_config.NumberColumn(format="%.2f"),
-                    "Dist. to Target": st.column_config.ProgressColumn(
-                        "Target Proximity", help="How close the stock is to your target price.", 
-                        format="%.2f%%", min_value=0, max_value=20 # Max visual bar is 20% away
-                    ),
-                    "Dist. to Stop": st.column_config.NumberColumn(
-                        format="%.2f%% buffer", help="Percentage buffer until Stop Loss is hit."
-                    ),
+                    "symbol": "Symbol",
+                    "ltp": st.column_config.NumberColumn("LTP", format="Rs %.2f"),
+                    "change_percent": st.column_config.NumberColumn("Change %", format="%.2f%%"),
+                    "entry_1": "Entry 1",
+                    "entry_must": "Must Entry",
+                    "target_price": "Target",
+                    "hard_target": "Hard Target",
+                    "stop_loss": "SL",
+                    "hard_sl": "Hard SL",
+                    "notes": "Thesis"
                 }
             )
 
-    # --- TAB 2: ADD TO WATCHLIST ---
+    # --- TAB 2: OBSERVERS (Conditions Fulfilled) ---
     with tabs[1]:
-        if role == "View Only":
-            st.warning("🔒 View Only mode: You cannot add to the watchlist.")
-        else:
-            with st.form("add_watchlist_form"):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    new_sym = st.text_input("Stock Symbol", placeholder="e.g. NABIL").upper().strip()
-                with col2:
-                    new_target = st.number_input("Target Price (Rs)", min_value=0.0, format="%.2f")
-                with col3:
-                    new_stop = st.number_input("Stop Loss (Rs)", min_value=0.0, format="%.2f")
-                
-                new_notes = st.text_input("Notes / Investment Thesis", placeholder="Why are you watching this?")
-                
-                submitted = st.form_submit_button("📌 Add to Watchlist", type="primary")
-                
-                if submitted:
-                    if not new_sym:
-                        st.error("Symbol is required.")
-                    else:
-                        try:
-                            with conn.session as s:
-                                sql = text("""
-                                    INSERT INTO watchlist (symbol, target_price, stop_loss, notes) 
-                                    VALUES (:sym, :tgt, :sl, :notes)
-                                    ON CONFLICT (symbol) DO UPDATE 
-                                    SET target_price = EXCLUDED.target_price, 
-                                        stop_loss = EXCLUDED.stop_loss, 
-                                        notes = EXCLUDED.notes
-                                """)
-                                s.execute(sql, {"sym": new_sym, "tgt": new_target, "sl": new_stop, "notes": new_notes})
-                                s.commit()
-                                
-                            # Log user action to Audit Log
-                            with conn.session as s:
-                                s.execute(text("INSERT INTO audit_log (action, symbol, details) VALUES ('WATCHLIST_ADD', :sym, 'Added/Updated Watchlist')"), {"sym": new_sym})
-                                s.commit()
-                                
-                            st.success(f"✅ {new_sym} added to your watchlist!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error("Failed to add to watchlist.")
-                            log_system_error(f"Watchlist Add Error ({new_sym}): {e}")
+        col_left, col_right = st.columns(2)
 
-    # --- TAB 3: MANAGE / DELETE ---
+        with col_left:
+            st.markdown("### 🛒 Entry Observer")
+            entries = df[df['entry_1_hit'] | df['must_entry_hit']]
+            if entries.empty:
+                st.write("No symbols in entry zone.")
+            for _, row in entries.iterrows():
+                status = "🔥 MUST BUY" if row['must_entry_hit'] else "🛒 Entry 1"
+                st.success(f"**{row['symbol']}**: {status} (LTP: {row['ltp']})")
+
+        with col_right:
+            st.markdown("### 🎯 SL & Target Observer")
+            exits = df[df['target_hit'] | df['sl_hit'] | df['hard_target_hit'] | df['hard_sl_hit']]
+            if exits.empty:
+                st.write("No signals triggered.")
+            for _, row in exits.iterrows():
+                if row['hard_target_hit']: st.error(f"🚨 **{row['symbol']}**: HARD TARGET (LTP: {row['ltp']})")
+                elif row['target_hit']: st.warning(f"🎯 **{row['symbol']}**: Target Reached (LTP: {row['ltp']})")
+                if row['hard_sl_hit']: st.error(f"💀 **{row['symbol']}**: HARD STOP LOSS (LTP: {row['ltp']})")
+                elif row['sl_hit']: st.warning(f"🛑 **{row['symbol']}**: SL Hit (LTP: {row['ltp']})")
+
+    # --- TAB 3: MANAGEMENT (Editor) ---
     with tabs[2]:
         if role == "View Only":
-            st.warning("🔒 View Only mode: You cannot modify the watchlist.")
-        elif wl_df.empty:
-            st.info("Nothing to manage.")
+            st.warning("🔒 Management is disabled in View Only mode.")
         else:
-            st.write("Remove stocks from your watchlist below:")
-            for idx, row in wl_df.iterrows():
-                col_text, col_btn = st.columns([4, 1])
-                with col_text:
-                    st.write(f"**{row['symbol']}** — Target: {row['target_price']} | SL: {row['stop_loss']}")
-                with col_btn:
-                    if st.button("❌ Remove", key=f"del_{row['symbol']}"):
-                        try:
+            # A. ADD/UPDATE FORM
+            with st.expander("➕ Add or Update Symbol", expanded=True):
+                with st.form("edit_form"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        sym = st.text_input("Symbol").upper().strip()
+                        e1 = st.number_input("Entry 1", min_value=0.0)
+                        em = st.number_input("Must Entry", min_value=0.0)
+                    with c2:
+                        tp = st.number_input("Target", min_value=0.0)
+                        htp = st.number_input("Hard Target", min_value=0.0)
+                    with c3:
+                        sl = st.number_input("Stop Loss", min_value=0.0)
+                        hsl = st.number_input("Hard SL", min_value=0.0)
+                    
+                    notes = st.text_area("Investment Notes")
+                    if st.form_submit_button("Save to Watchlist", type="primary"):
+                        if sym:
                             with conn.session as s:
-                                s.execute(text("DELETE FROM watchlist WHERE symbol = :sym"), {"sym": row['symbol']})
-                                s.execute(text("INSERT INTO audit_log (action, symbol, details) VALUES ('WATCHLIST_REMOVE', :sym, 'Removed from Watchlist')"), {"sym": row['symbol']})
+                                s.execute(text("""
+                                    INSERT INTO watchlist (symbol, target_price, stop_loss, hard_target, hard_sl, entry_1, entry_must, notes)
+                                    VALUES (:s, :tp, :sl, :htp, :hsl, :e1, :em, :n)
+                                    ON CONFLICT (symbol) DO UPDATE SET
+                                        target_price=EXCLUDED.target_price, stop_loss=EXCLUDED.stop_loss,
+                                        hard_target=EXCLUDED.hard_target, hard_sl=EXCLUDED.hard_sl,
+                                        entry_1=EXCLUDED.entry_1, entry_must=EXCLUDED.entry_must, notes=EXCLUDED.notes
+                                """), {"s":sym, "tp":tp, "sl":sl, "htp":htp, "hsl":hsl, "e1":e1, "em":em, "n":notes})
                                 s.commit()
+                            st.success(f"Updated {sym}")
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to delete {row['symbol']}.")
-                            log_system_error(f"Watchlist Delete Error ({row['symbol']}): {e}")
+
+            # B. QUICK REMOVE
+            st.markdown("### 🗑️ Remove from Watchlist")
+            if not wl_df.empty:
+                for _, row in wl_df.iterrows():
+                    col_sym, col_btn = st.columns([4, 1])
+                    col_sym.write(f"**{row['symbol']}**")
+                    if col_btn.button("Delete", key=f"del_{row['symbol']}"):
+                        with conn.session as s:
+                            s.execute(text("DELETE FROM watchlist WHERE symbol = :s"), {"s": row['symbol']})
+                            s.commit()
+                        st.rerun()
