@@ -38,7 +38,7 @@ def calculate_nepse_fees(qty, price, transaction_type, include_dp=True, is_long_
         return net_receivable, broker_commission, total_fees, cgt
 
 # --- App Initialization ---
-st.set_page_config(layout="wide")
+
 st.title("Advanced NEPSE WACC & Trade Simulator")
 st.write("Understand your true costs. Factor in commissions, taxes, and fees before you execute.")
 
