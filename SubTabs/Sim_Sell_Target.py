@@ -35,6 +35,7 @@ def render(role):
 
     with col2:
         with st.form("sell_sim_form"):
+            editable_wacc = st.number_input("Adjust WACC (Rs)", min_value=1.0, value=float(stk_data['wacc']))
             sim_sell_qty = st.number_input("Shares to Sell", min_value=1, max_value=int(stk_data['net_qty']), value=int(stk_data['net_qty']))
             sim_sell_target = st.number_input("Target Sell Price (Rs)", min_value=1.0, value=float(stk_data['wacc'] * 1.1)) # Default 10% gain
             cgt_rate = st.radio("CGT Rate", options=[5.0, 7.5], format_func=lambda x: f"{x}% (Long Term)" if x == 5.0 else f"{x}% (Short Term)", horizontal=True)
@@ -42,7 +43,7 @@ def render(role):
             if st.form_submit_button("Simulate Payout", type="primary"):
                 # --- Core Financial Engine ---
                 gross_amt = sim_sell_qty * sim_sell_target
-                cost_basis = sim_sell_qty * stk_data['wacc']
+                cost_basis = sim_sell_qty * editable_wacc
                 
                 # Deductions
                 broker_fee = gross_amt * 0.004  # Avg 0.4%
