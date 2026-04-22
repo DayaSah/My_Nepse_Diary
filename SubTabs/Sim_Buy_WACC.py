@@ -1,11 +1,15 @@
 import streamlit as st
 import pandas as pd
 
-# --- NEPSE Fee Configuration & Calculator ---
 def calculate_nepse_fees(qty, price, transaction_type, include_dp=True, is_long_term=False, current_wacc=0):
+    """
+    Analyzes trade execution on both sides:
+    Buy Side: Increases cost basis by adding commissions.
+    Sell Side: Reduces net payout by subtracting commissions and CGT.
+    """
     amount = qty * price
     
-    # Broker commission tiers
+    # NEPSE Tiered Broker Commission
     if amount <= 50000:
         broker_pct = 0.0040
     elif amount <= 500000:
@@ -20,173 +24,113 @@ def calculate_nepse_fees(qty, price, transaction_type, include_dp=True, is_long_
     broker_commission = amount * broker_pct
     sebon_fee = amount * 0.00015
     dp_fee = 25.0 if include_dp else 0.0
-
     total_fees = broker_commission + sebon_fee + dp_fee
 
     if transaction_type == 'BUY':
+        # BUY SIDE: You pay more than the ticker price
         total_cost = amount + total_fees
-        return total_cost, broker_commission, total_fees, 0.0
-    else: # SELL
-        # CGT calculation based on profit
-        profit = amount - (current_wacc * qty) - total_fees
+        return total_cost, total_fees, 0.0
+    else: 
+        # SELL SIDE: You receive less than the ticker price
+        # CGT is calculated on (Sales - Fees) - (WACC * Qty)
+        cost_basis = current_wacc * qty
+        profit = amount - total_fees - cost_basis
         cgt = 0.0
         if profit > 0:
             cgt_rate = 0.05 if is_long_term else 0.075
             cgt = profit * cgt_rate
             
         net_receivable = amount - total_fees - cgt
-        return net_receivable, broker_commission, total_fees, cgt
+        return net_receivable, total_fees, cgt
 
-# --- App Initialization ---
+def render(role):
+    st.header("Advanced WACC & Execution Simulator")
+    st.write("Simulate buys/sells with real NEPSE fees and manual WACC overrides.")
 
-st.title("Advanced NEPSE WACC & Trade Simulator")
-st.write("Understand your true costs. Factor in commissions, taxes, and fees before you execute.")
-
-# --- Sidebar Controls ---
-st.sidebar.header("Simulation Settings")
-data_source = st.sidebar.radio("Portfolio Source", ["Manual Entry", "Database (Neon)"])
-include_dp = st.sidebar.checkbox("Include DP Fee (Rs 25/txn)", value=True)
-
-initial_qty = 0
-initial_wacc = 0.0
-symbol = "CUSTOM"
-
-# --- Data Loading ---
-if data_source == "Database (Neon)":
-    try:
-        conn = st.connection("neon", type="sql")
-        port_df = conn.query("SELECT * FROM portfolio", ttl=0)
+    # --- INPUT OVERRIDES ---
+    with st.expander("🛠️ Manual Portfolio Overrides", expanded=True):
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            custom_symbol = st.text_input("Symbol", value="NABIL")
+        with col_b:
+            manual_qty = st.number_input("Existing Quantity", min_value=0, value=100)
+        with col_c:
+            manual_wacc = st.number_input("Existing WACC (Rs)", min_value=0.0, value=500.0)
         
-        if port_df.empty:
-            st.sidebar.warning("Database portfolio is empty. Switching to manual.")
-            data_source = "Manual Entry"
-        else:
-            symbols = port_df['symbol'].unique().tolist()
-            symbol = st.sidebar.selectbox("Select Asset", symbols)
-            
-            # Simple aggregation (Note: True FIFO is recommended for production)
-            asset_data = port_df[port_df['symbol'] == symbol]
-            buys = asset_data[asset_data['transaction_type'] == 'BUY']
-            total_bought = buys['qty'].sum()
-            total_cost = (buys['qty'] * buys['price']).sum()
-            
-            sells = asset_data[asset_data['transaction_type'] == 'SELL']['qty'].sum()
-            
-            initial_qty = total_bought - sells
-            initial_wacc = total_cost / total_bought if total_bought > 0 else 0.0
-            
-            # Allow user to override DB WACC
-            st.sidebar.markdown("---")
-            st.sidebar.write("Override DB Values:")
-            initial_wacc = st.sidebar.number_input("Starting WACC", value=float(initial_wacc))
-            
-    except Exception as e:
-        st.sidebar.error("Failed to connect to DB. Using Manual Mode.")
-        data_source = "Manual Entry"
+        include_dp = st.checkbox("Apply Rs 25 DP Fee to every transaction?", value=True)
 
-if data_source == "Manual Entry":
-    symbol = st.sidebar.text_input("Symbol", value="NABIL")
-    initial_qty = st.sidebar.number_input("Current Quantity", min_value=0, value=100)
-    initial_wacc = st.sidebar.number_input("Current WACC (Rs)", min_value=0.0, value=500.0)
+    st.divider()
 
-# --- State Display ---
-col1, col2, col3 = st.columns(3)
-col1.metric("Asset", symbol)
-col2.metric("Current Holdings", f"{initial_qty:,.0f} Units")
-col3.metric("Current WACC", f"Rs {initial_wacc:,.2f}")
+    # --- MULTIPLE TRANSACTION TABLE ---
+    st.subheader("Step 1: Plan Multiple Transactions")
+    st.info("The simulator processes these sequentially. Buy side increases WACC; Sell side reduces quantity.")
+    
+    if 'txn_buffer' not in st.session_state:
+        st.session_state.txn_buffer = pd.DataFrame([
+            {"Type": "BUY", "Qty": 50, "Price": manual_wacc * 0.95, "LT_Sell": False}
+        ])
 
-st.divider()
-
-# --- Multiple Transactions Editor ---
-st.subheader("Simulate Multiple Executions")
-st.write("Add your anticipated buy and sell orders. The simulator processes them sequentially top-to-bottom.")
-
-# Initialize an empty dataframe for the data editor
-if 'trade_plan' not in st.session_state:
-    st.session_state.trade_plan = pd.DataFrame(
-        columns=["Type", "Qty", "Price", "Is_Long_Term"],
-        data=[["BUY", 100, float(initial_wacc), False]]
+    edited_plan = st.data_editor(
+        st.session_state.txn_buffer,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Type": st.column_config.SelectboxColumn("Action", options=["BUY", "SELL"], required=True),
+            "Qty": st.column_config.NumberColumn("Quantity", min_value=1, step=10),
+            "Price": st.column_config.NumberColumn("Price (Rs)", min_value=1.0),
+            "LT_Sell": st.column_config.CheckboxColumn("LT (>1yr)?")
+        }
     )
 
-# Use data_editor to allow adding/removing multiple rows
-edited_plan = st.data_editor(
-    st.session_state.trade_plan,
-    column_config={
-        "Type": st.column_config.SelectboxColumn("Action", options=["BUY", "SELL"], required=True),
-        "Qty": st.column_config.NumberColumn("Quantity", min_value=10, step=10, required=True),
-        "Price": st.column_config.NumberColumn("Execution Price", min_value=1.0, format="%.2f", required=True),
-        "Is_Long_Term": st.column_config.CheckboxColumn("Long Term Sell? (>365 Days)")
-    },
-    num_rows="dynamic",
-    use_container_width=True
-)
+    # --- EXECUTION ANALYSIS ---
+    if st.button("🚀 Execute Simulation", type="primary"):
+        curr_qty = manual_qty
+        curr_wacc = manual_wacc
+        history = []
 
-if st.button("Run Execution Analysis", type="primary"):
-    current_qty = initial_qty
-    current_wacc = initial_wacc
-    
-    results = []
-    
-    for index, row in edited_plan.iterrows():
-        action = row['Type']
-        qty = row['Qty']
-        price = row['Price']
-        is_lt = row['Is_Long_Term']
-        
-        if action == "BUY":
-            total_cost, broker_comm, total_fees, _ = calculate_nepse_fees(
-                qty, price, "BUY", include_dp
-            )
-            
-            # Calculate new WACC
-            current_value = current_qty * current_wacc
-            current_qty += qty
-            current_wacc = (current_value + total_cost) / current_qty
-            
-            results.append({
-                "Action": "BUY", "Qty": qty, "Price": price, 
-                "Fees": total_fees, "CGT": 0, "Cash Flow": -total_cost,
-                "Running Qty": current_qty, "Running WACC": current_wacc
-            })
-            
-        elif action == "SELL":
-            if qty > current_qty:
-                st.error(f"Row {index+1}: Cannot sell {qty} shares. Only {current_qty} available.")
-                st.stop()
+        for i, row in edited_plan.iterrows():
+            if row["Type"] == "BUY":
+                # BUY SIDE ANALYSIS
+                total_outflow, fees, _ = calculate_nepse_fees(row["Qty"], row["Price"], "BUY", include_dp)
                 
-            net_receivable, broker_comm, total_fees, cgt = calculate_nepse_fees(
-                qty, price, "SELL", include_dp, is_lt, current_wacc
-            )
-            
-            current_qty -= qty
-            # WACC does not change on sell, only quantity changes.
-            if current_qty == 0:
-                current_wacc = 0.0
+                # Math: (Old Value + New Outflow) / Total Qty
+                new_total_qty = curr_qty + row["Qty"]
+                curr_wacc = ((curr_qty * curr_wacc) + total_outflow) / new_total_qty
+                curr_qty = new_total_qty
                 
-            results.append({
-                "Action": "SELL", "Qty": qty, "Price": price, 
-                "Fees": total_fees, "CGT": cgt, "Cash Flow": net_receivable,
-                "Running Qty": current_qty, "Running WACC": current_wacc
-            })
+                history.append({
+                    "Step": i+1, "Action": "BUY", "Qty": row["Qty"], "Price": row["Price"],
+                    "Fees": fees, "CGT": 0.0, "Net Cashflow": -total_outflow, "New WACC": curr_wacc
+                })
+                
+            elif row["Type"] == "SELL":
+                # SELL SIDE ANALYSIS
+                if row["Qty"] > curr_qty:
+                    st.error(f"Row {i+1}: Insufficient shares to sell {row['Qty']}.")
+                    continue
+                
+                total_inflow, fees, cgt = calculate_nepse_fees(row["Qty"], row["Price"], "SELL", include_dp, row["LT_Sell"], curr_wacc)
+                curr_qty -= row["Qty"]
+                
+                history.append({
+                    "Step": i+1, "Action": "SELL", "Qty": row["Qty"], "Price": row["Price"],
+                    "Fees": fees, "CGT": cgt, "Net Cashflow": total_inflow, "New WACC": curr_wacc
+                })
 
-    # Display Results
-    res_df = pd.DataFrame(results)
-    
-    st.subheader("Execution Breakdown")
-    st.dataframe(
-        res_df.style.format({
+        # --- RESULTS DISPLAY ---
+        st.subheader("Simulation Results")
+        res_df = pd.DataFrame(history)
+        st.table(res_df.style.format({
             "Price": "{:.2f}", "Fees": "{:.2f}", "CGT": "{:.2f}", 
-            "Cash Flow": "{:.2f}", "Running WACC": "{:.2f}"
-        }), 
-        use_container_width=True
-    )
-    
-    st.markdown("### Final Position Summary")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Final Quantity", f"{current_qty:,.0f}")
-    
-    wacc_diff = current_wacc - initial_wacc
-    c2.metric("Final WACC", f"Rs {current_wacc:,.2f}", f"{wacc_diff:,.2f} Rs", delta_color="inverse")
-    
-    total_cash_flow = res_df['Cash Flow'].sum()
-    c3.metric("Net Cash Flow from Trades", f"Rs {total_cash_flow:,.2f}")
+            "Net Cashflow": "{:.2f}", "New WACC": "{:.2f}"
+        }))
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Final Units", f"{curr_qty:,.0f}")
+        c2.metric("Final WACC", f"Rs {curr_wacc:,.2f}", f"{curr_wacc - manual_wacc:,.2f} Rs", delta_color="inverse")
+        c3.metric("Net Cash Movement", f"Rs {res_df['Net Cashflow'].sum():,.2f}")
+
+        if curr_wacc > row["Price"] and row["Type"] == "BUY":
+            st.warning("Decision Critique: You are buying above your current WACC, which is increasing your break-even point. Ensure the fundamental upside justifies this.")
+        elif curr_wacc < manual_wacc:
+            st.success("Decision Critique: Successfully averaged down. Your cost basis has improved.")
