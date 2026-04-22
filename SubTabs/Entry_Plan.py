@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-def render_entry_plan():
+def render(role):
     st.subheader("🎯 Trade Entry Planner")
     st.write("Plan your entry, targets, and exits with full fee calculations.")
 
