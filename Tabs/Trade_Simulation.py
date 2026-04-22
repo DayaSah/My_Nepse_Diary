@@ -5,7 +5,7 @@ def render_page(role):
     st.caption("Simulate buys, calculate exact net payouts, and plan your breakeven targets.")
 
     # Create the SubTabs UI
-    tabs = st.tabs(["📉 WACC Averaging (Buy)", "💰 Net Profit Simulator (Sell)", "🚑 Recovery & Breakeven"])
+    tabs = st.tabs(["📉 WACC Averaging (Buy)", "💰 Net Profit Simulator (Sell)", "🚑 Recovery & Breakeven", "Entry And Exit Plan"])
     
     # Dynamically load each subtab
     with tabs[0]:
@@ -28,3 +28,11 @@ def render_page(role):
             Sim_Recovery.render(role)
         except Exception as e:
             st.error(f"🚧 SubTab Error: {e}")
+
+    with tabs[3]:
+        try:
+            from SubTabs import Entry_Plan
+            Sim_Recovery.render(role)
+        except Exception as e:
+            st.error(f"🚧 SubTab Error: {e}")
+
