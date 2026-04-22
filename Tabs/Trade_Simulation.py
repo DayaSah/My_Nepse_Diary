@@ -32,7 +32,7 @@ def render_page(role):
     with tabs[3]:
         try:
             from SubTabs import Entry_Plan
-            Sim_Recovery.render(role)
+            Entry_Plan.render(role)
         except Exception as e:
             st.error(f"🚧 SubTab Error: {e}")
 
