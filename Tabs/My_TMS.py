@@ -29,6 +29,7 @@ def render_page(role):
         "Nic Asia Bank", 
         "Khalti", 
         "Esewa", 
+        "Moru Pay",
         "Other Specified In Remark"
     ]
 
