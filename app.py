@@ -88,29 +88,46 @@ with st.sidebar:
         
     st.divider()
     
-    # The New Attractive Menu
-    menu_options = [
-        "🏠 Dashboard Overview",
-        "💼 Active Portfolio",
-        "➕ Add Transaction",
-        "🏦 My TMS (Cash & Margin)",
-        "🧮 Trade Simulation",
-        "🎯 Watchlist & Alerts",
-        "🧠 Risk & Journal",
-        "📜 Realized History",
-        "📈 Wealth Trajectory",
-        "🤖 AI Market Analyst",
-        "⚙️ Admin: Manage Data",
-        "📋 System Activity Log"
-    ]
+    # --- DYNAMIC MENU ROUTING ---
+    if st.session_state.role == "Admin":
+        menu_options = [
+            "🏠 Dashboard Overview",
+            "💼 Active Portfolio",
+            "➕ Add Transaction",
+            "🏦 My TMS (Cash & Margin)",
+            "🧮 Trade Simulation",
+            "🎯 Watchlist & Alerts",
+            "🧠 Risk & Journal",
+            "📜 Realized History",
+            "📈 Wealth Trajectory",
+            "🤖 AI Market Analyst",
+            "⚙️ Admin: Manage Data",      # Hidden from Viewers
+            "📋 System Activity Log"      # Hidden from Viewers
+        ]
+    else:
+        # View-Only Menu (Add Transaction is now visible!)
+        menu_options = [
+            "🏠 Dashboard Overview",
+            "💼 Active Portfolio",
+            "➕ Add Transaction",
+            "🏦 My TMS (Cash & Margin)",
+            "🧮 Trade Simulation",
+            "🎯 Watchlist & Alerts",
+            "🧠 Risk & Journal",
+            "📜 Realized History",
+            "📈 Wealth Trajectory",
+            "🤖 AI Market Analyst"
+        ]
     
-    # Render the menu radio buttons ONCE
+    # Render the menu radio buttons with the dynamically generated list
     selection = st.radio("Main Menu", menu_options, label_visibility="collapsed")
     
     st.divider()
     
     # System Actions (Sync Data)
     st.markdown("#### ⚙️ System Actions")
+    
+    # --- VISIBLE TO EVERYONE ---
     if st.button("🔄 Sync Live Market Data", type="primary", use_container_width=True):
         with st.spinner("Fetching live data from Chukul API..."):
             try:
