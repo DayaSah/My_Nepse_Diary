@@ -224,41 +224,64 @@ def render_page(role):
             st.info(f"**Total Fees & Taxes:** Rs {total_cost_of_trade:,.2f}")
 
     # ==========================================
-    # SAVE TO DATABASE
+    # SAVE TO DATABASE (Portfolio + TMS Sync)
     # ==========================================
-    if btn_save and is_admin: # <-- Added admin check here too just in case
+    if btn_save and is_admin:
         if not t_symbol:
             st.error("Please enter a valid Stock Symbol.")
         else:
             try:
+                # Calculate the Wallet Impact for TMS
+                tms_amount = -res['total'] if trx_type == "BUY" else res['total']
+                
+                # --- NEW: Calculate TMS Commission & CGT Database Values ---
+                tms_comm_db = res['broker'] + res['sebon']
+                # If SELL, get CGT (even if it is 0.0). If BUY, send None (Empty/NULL).
+                cgt_val_db = res.get('cgt', 0.0) if trx_type == "SELL" else None
+                # -----------------------------------------------------------
+                
                 with conn.session as s:
-                    # --- NEW: Added total_invested and total_received columns ---
+                    # 1. RECORD IN PORTFOLIO TABLE
                     s.execute(text("""
-                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received) 
-                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr)
+                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received, tms_commission, cgt) 
+                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr, :tms_c, :cgt_v)
                     """), {
-                        "d": t_date, 
-                        "s": t_symbol, 
-                        "q": t_qty, 
-                        "p": t_price, 
-                        "t": trx_type,
-                        "r": t_remarks,
-                        "n": res['total'],
-                        "ti": total_invested_db,  # <-- NEW
-                        "tr": total_received_db   # <-- NEW
+                        "d": t_date, "s": t_symbol, "q": t_qty, "p": t_price, 
+                        "t": trx_type, "r": t_remarks, "n": res['total'],
+                        "ti": total_invested_db, "tr": total_received_db,
+                        "tms_c": tms_comm_db, "cgt_v": cgt_val_db    # <-- NEW
                     })
                     
+                    # 2. AUTOMATICALLY RECORD IN TMS_TRX TABLE
+                    s.execute(text("""
+                        INSERT INTO tms_trx (date, stock, type, medium, amount, charge, remark, status, reference) 
+                        VALUES (:d, :s, :t, :m, :a, :c, :r, :st, :ref)
+                    """), {
+                        "d": t_date,
+                        "s": t_symbol,
+                        "t": trx_type.capitalize(),
+                        "m": "Collateral",
+                        "a": tms_amount,            
+                        "c": 0,                     
+                        "r": f"Auto-Logged: {t_remarks}",
+                        "st": "Settled",
+                        "ref": ""                   
+                    })
+                    
+                    # 3. AUDIT LOG
                     s.execute(text("""
                         INSERT INTO audit_log (action, symbol, details) 
                         VALUES (:act, :sym, :det)
                     """), {
                         "act": f"TRADE_{trx_type}", 
                         "sym": t_symbol, 
-                        "det": f"{t_qty} units @ Rs {t_price} | Net: Rs {res['total']:.2f} | Notes: {t_remarks}"
+                        "det": f"{t_qty} units @ Rs {t_price} | TMS Sync: Rs {tms_amount:,.2f} | Comm: Rs {tms_comm_db:.2f}"
                     })
+                    
                     s.commit()
-                st.success(f"✅ {trx_type} logged for {t_symbol}!")
+                st.success(f"✅ {trx_type} logged and TMS Balance updated!")
                 st.balloons()
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
@@ -266,7 +289,7 @@ def render_page(role):
     st.markdown("---")
     st.markdown("### 🕒 Recent Entries")
     try:
-        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks, total_invested, total_received FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
+        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks, total_invested, total_received, cgt, tms_commission FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
         if not recent.empty:
             st.dataframe(recent, use_container_width=True, hide_index=True)
         else:
