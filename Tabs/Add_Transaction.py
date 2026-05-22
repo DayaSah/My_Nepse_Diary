@@ -257,7 +257,7 @@ def render_page(role):
                     # 1. RECORD IN PORTFOLIO TABLE
                     s.execute(text("""
                         INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received, tms_commission, cgt, soft_sl, hard_sl, soft_target, hard_target, soft_entry, hard_entry) 
-                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr, :tms_c, :cgt_v :ssl, :hsl, :starg, :htarg, :sent, :hent)
+                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr, :tms_c, :cgt_v, :ssl, :hsl, :starg, :htarg, :sent, :hent)
                     """), {
                         "d": t_date, "s": t_symbol, "q": t_qty, "p": t_price, 
                         "t": trx_type, "r": t_remarks, "n": res['total'],
@@ -305,7 +305,7 @@ def render_page(role):
     st.markdown("---")
     st.markdown("### 🕒 Recent Entries")
     try:
-        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks, total_invested, total_received, cgt, tms_commission FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
+        recent = conn.query("SELECT date, symbol, transaction_type as type, qty, price, remarks, total_invested, total_received, cgt, tms_commission, soft_sl, hard_sl, soft_target, hard_target, soft_entry, hard_entry FROM portfolio ORDER BY date DESC LIMIT 20", ttl=0)
         if not recent.empty:
             st.dataframe(recent, use_container_width=True, hide_index=True)
         else:
