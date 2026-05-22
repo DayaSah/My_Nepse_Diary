@@ -150,6 +150,19 @@ def render_page(role):
 
             user_wacc = calc_wacc
             cgt_val = 0.05 
+            soft_sl = hard_sl = soft_target = hard_target = soft_entry = hard_entry = None
+
+            if trx_type == "BUY":
+                with st.expander("🎯 Strategy Parameters (Optional)"):
+                    c_sl, c_targ, c_ent = st.columns(3)
+                    soft_sl = c_sl.number_input("Soft SL", value=None, step=0.1, placeholder="0.0")
+                    hard_sl = c_sl.number_input("Hard SL", value=None, step=0.1, placeholder="0.0")
+                    
+                    soft_target = c_targ.number_input("Soft Target", value=None, step=0.1, placeholder="0.0")
+                    hard_target = c_targ.number_input("Hard Target", value=None, step=0.1, placeholder="0.0")
+                    
+                    soft_entry = c_ent.number_input("Soft Entry", value=None, step=0.1, placeholder="0.0")
+                    hard_entry = c_ent.number_input("Hard Entry", value=None, step=0.1, placeholder="0.0")
             
             if trx_type == "SELL":
                 days_held = (date.today() - first_date).days
@@ -243,13 +256,16 @@ def render_page(role):
                 with conn.session as s:
                     # 1. RECORD IN PORTFOLIO TABLE
                     s.execute(text("""
-                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received, tms_commission, cgt) 
-                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr, :tms_c, :cgt_v)
+                        INSERT INTO portfolio (date, symbol, qty, price, transaction_type, remarks, net_amount, total_invested, total_received, tms_commission, cgt, soft_sl, hard_sl, soft_target, hard_target, soft_entry, hard_entry) 
+                        VALUES (:d, :s, :q, :p, :t, :r, :n, :ti, :tr, :tms_c, :cgt_v :ssl, :hsl, :starg, :htarg, :sent, :hent)
                     """), {
                         "d": t_date, "s": t_symbol, "q": t_qty, "p": t_price, 
                         "t": trx_type, "r": t_remarks, "n": res['total'],
                         "ti": total_invested_db, "tr": total_received_db,
-                        "tms_c": tms_comm_db, "cgt_v": cgt_val_db    # <-- NEW
+                        "tms_c": tms_comm_db, "cgt_v": cgt_val_db,    # <-- NEW
+                        "ssl": soft_sl, "hsl": hard_sl, 
+                        "starg": soft_target, "htarg": hard_target, 
+                        "sent": soft_entry, "hent": hard_entry
                     })
                     
                     # 2. AUTOMATICALLY RECORD IN TMS_TRX TABLE
