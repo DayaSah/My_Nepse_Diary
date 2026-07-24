@@ -84,8 +84,8 @@ def calculate_exact_metrics(row):
     net_sell_before_tax = base_sell - total_sell_fees
     profit_for_tax = net_sell_before_tax - total_cost
     
-    # Apply conservative 7.5% CGT (Short term assumption for safety)
-    cgt = max(0.0, profit_for_tax * 0.075) if profit_for_tax > 0 else 0.0
+    # Apply conservative 10% CGT (Short term assumption for safety)
+    cgt = max(0.0, profit_for_tax * 0.1) if profit_for_tax > 0 else 0.0
     
     net_receivable = net_sell_before_tax - cgt
     true_pl_amt = net_receivable - total_cost
