@@ -166,10 +166,10 @@ def render_page(role):
                 default_tax_idx = 0 if days_held > 365 else 1
                 cgt_selection = sc2.selectbox(
                     "CGT Rate", 
-                    ["5% (Long Term > 1yr)", "7.5% (Short Term < 1yr)"],
+                    ["7.5% (Long Term > 1yr)", "10% (Short Term < 1yr)"],
                     index=default_tax_idx
                 )
-                cgt_val = 0.075 if "7.5%" in cgt_selection else 0.05
+                cgt_val = 0.1 if "7.5%" in cgt_selection else 0.075
 
             st.divider()
             c_dp, c_comm = st.columns(2)
