@@ -62,7 +62,7 @@ def get_current_stock_info(conn, symbol):
     except Exception as e:
         return 0, 0.0, date.today()
 
-def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, override_comm=0.0):
+def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.075, override_comm=0.0):
     """Perfected NEPSE logic with exact algebraic breakeven reversal."""
     base = qty * price
     
@@ -149,7 +149,7 @@ def render_page(role):
             t_remarks = st.text_input("Remarks / Notes", placeholder="e.g., Bought on dip, IPO sale, etc.")
 
             user_wacc = calc_wacc
-            cgt_val = 0.05 
+            cgt_val = 0.075 
             soft_sl = hard_sl = soft_target = hard_target = soft_entry = hard_entry = None
 
             if trx_type == "BUY":
@@ -165,8 +165,10 @@ def render_page(role):
                     hard_entry = c_ent.number_input("Hard Entry", value=None, step=0.1, placeholder="0.0")
             
             if trx_type == "SELL":
-                days_held = (date.today() - first_date).days
-                st.markdown(f"**Holding Info:** Purchased on `{first_date}` ({days_held} days ago)")
+            
+                days_held = (t_date - first_date).days
+                st.markdown(f"**Holding Info:** Purchased on `{first_date}` ({days_held} days held at time of transaction)"
+                
                 
                 if t_qty > owned_qty:
                     st.error(f"⚠️ **Short Sell Warning:** You only own {owned_qty} units of {t_symbol}.")
@@ -179,10 +181,10 @@ def render_page(role):
                 default_tax_idx = 0 if days_held > 365 else 1
                 cgt_selection = sc2.selectbox(
                     "CGT Rate", 
-                    ["5% (Long Term > 1yr)", "7.5% (Short Term < 1yr)"],
+                    ["7.5% (Long Term > 1yr)", "10% (Short Term < 1yr)"],
                     index=default_tax_idx
                 )
-                cgt_val = 0.075 if "7.5%" in cgt_selection else 0.05
+                cgt_val = 0.1 if "10%" in cgt_selection else 0.075
 
             st.divider()
             c_dp, c_comm = st.columns(2)
