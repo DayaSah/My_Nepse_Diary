@@ -62,7 +62,7 @@ def get_current_stock_info(conn, symbol):
     except Exception as e:
         return 0, 0.0, date.today()
 
-def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.05, override_comm=0.0):
+def calculate_fees(qty, price, trx_type, include_dp, wacc=0.0, cgt_rate=0.075, override_comm=0.0):
     """Perfected NEPSE logic with exact algebraic breakeven reversal."""
     base = qty * price
     
@@ -149,7 +149,7 @@ def render_page(role):
             t_remarks = st.text_input("Remarks / Notes", placeholder="e.g., Bought on dip, IPO sale, etc.")
 
             user_wacc = calc_wacc
-            cgt_val = 0.05 
+            cgt_val = 0.075 
             
             if trx_type == "SELL":
                 days_held = (date.today() - first_date).days
@@ -169,7 +169,7 @@ def render_page(role):
                     ["7.5% (Long Term > 1yr)", "10% (Short Term < 1yr)"],
                     index=default_tax_idx
                 )
-                cgt_val = 0.1 if "7.5%" in cgt_selection else 0.075
+                cgt_val = 0.1 if "10%" in cgt_selection else 0.075
 
             st.divider()
             c_dp, c_comm = st.columns(2)
