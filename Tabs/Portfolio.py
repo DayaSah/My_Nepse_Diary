@@ -54,21 +54,23 @@ def calculate_exact_metrics(row):
     total_cost = row['total_cost']
     ltp = row['ltp']
     
-    # 1. EXACT BREAKEVEN REVERSAL
-    if total_cost <= 50000: comm_rate = 0.0036 
-    elif total_cost <= 500000: comm_rate = 0.0033 
-    elif total_cost <= 2000000: comm_rate = 0.0031 
-    elif total_cost <= 10000000: comm_rate = 0.0027 
+    # 1. EXACT BREAKEVEN REVERSAL (Accounts for Tier Crossings)
+    # Estimate base sell target without comm tier first
+    raw_target = total_cost + 25.0
+    if raw_target <= 50000: comm_rate = 0.0036
+    elif raw_target <= 500000: comm_rate = 0.0033
+    elif raw_target <= 2000000: comm_rate = 0.0031
+    elif raw_target <= 10000000: comm_rate = 0.0027
     else: comm_rate = 0.0024
-    
-    if (total_cost * comm_rate) < 10.0:
+
+    if (raw_target * comm_rate) < 10.0:
         target_sell = (total_cost + 25.0 + 10.0) / (1.0 - 0.00015)
     else:
         target_sell = (total_cost + 25.0) / (1.0 - comm_rate - 0.00015)
         
     breakeven = target_sell / qty if qty > 0 else 0.0
     
-    # 2. EXACT NET P/L AT CURRENT LTP (Includes all fees and CGT)
+    # 2. EXACT NET P/L AT CURRENT LTP
     base_sell = qty * ltp
     if base_sell <= 50000: s_comm = 0.0036 
     elif base_sell <= 500000: s_comm = 0.0033 
@@ -84,8 +86,8 @@ def calculate_exact_metrics(row):
     net_sell_before_tax = base_sell - total_sell_fees
     profit_for_tax = net_sell_before_tax - total_cost
     
-    # Apply conservative 7.5% CGT (Short term assumption for safety)
-    cgt = max(0.0, profit_for_tax * 0.075) if profit_for_tax > 0 else 0.0
+    # Conservative 10% CGT (Updated short-term rate for safer unrealized projection)
+    cgt = max(0.0, profit_for_tax * 0.10) if profit_for_tax > 0 else 0.0
     
     net_receivable = net_sell_before_tax - cgt
     true_pl_amt = net_receivable - total_cost
