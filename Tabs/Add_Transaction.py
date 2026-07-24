@@ -167,7 +167,7 @@ def render_page(role):
             if trx_type == "SELL":
             
                 days_held = (t_date - first_date).days
-                st.markdown(f"**Holding Info:** Purchased on `{first_date}` ({days_held} days held at time of transaction)"
+                st.markdown(f"**Holding Info:** Purchased on `{first_date}` ({days_held} days held at time of transaction)")
                 
                 
                 if t_qty > owned_qty:
@@ -185,6 +185,8 @@ def render_page(role):
                     index=default_tax_idx
                 )
                 cgt_val = 0.1 if "10%" in cgt_selection else 0.075
+
+            
 
             st.divider()
             c_dp, c_comm = st.columns(2)
